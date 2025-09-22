@@ -26,6 +26,11 @@
 #include <BLE2902.h>
 // #include <BLE2901.h>
 
+#include <SPI.h>
+#include <SD.h>
+#include <Wire.h>
+#include <Adafruit_ADS1X15.h>
+
 BLEServer *pServer = NULL;
 BLECharacteristic *pCharacteristic = NULL;
 // BLE2901 *descriptor_2901 = NULL;
@@ -33,12 +38,27 @@ BLECharacteristic *pCharacteristic = NULL;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
 uint32_t value = 0;
-
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
 
+//Here we are creating a servcie for Environmental Sensing Service (ESS) - standardised UUID for ESS https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf
 #define SERVICE_UUID (BLEUUID((uint16_t)0x181A))
-#define CHARACTERISTIC_UUID (BLEUUID((uint16_t)0x2B18))
+
+//Here we are creating a methane characteristic (standartised UUID for methane https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf )
+#define CHARACTERISTIC_UUID_METHANE (BLEUUID((uint16_t)0x2BD1))
+
+//here we are creating an object for the ADS
+Adafruit_ADS1015 ads1; 
+void setUpMEMS() {
+ads1.begin(0x48);
+}
+//Here is a function to initialize the MEMS sensor (only ads1)
+void initMEMS(){
+ if (!ads1.begin(0x48)) {
+    Serial.println("Could not find ADS1015 at 0x48");
+    while (1);
+  }
+}
 
 class MyServerCallbacks : public BLEServerCallbacks
 {
@@ -57,6 +77,7 @@ void setup()
 {
   Serial.begin(115200);
 
+  initMEMS();
   // Create the BLE Device
   BLEDevice::init("MyBLEDevice");
 
@@ -64,12 +85,13 @@ void setup()
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
+
   // Create the BLE Service
   BLEService *pService = pServer->createService(SERVICE_UUID);
 
   // Create a BLE Characteristic
   pCharacteristic = pService->createCharacteristic(
-      CHARACTERISTIC_UUID,
+      CHARACTERISTIC_UUID_METHANE,
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_INDICATE);
 
   // Creates BLE Descriptor 0x2902: Client Characteristic Configuration Descriptor (CCCD)
@@ -94,12 +116,18 @@ void setup()
 
 void loop()
 {
-  // notify changed value
+  // here we are printing methane value
   if (deviceConnected)
   {
-    pCharacteristic->setValue(value);
-    pCharacteristic->notify();
-    value++;
+  int16_t  ch4 = ads1.readADC_SingleEnded(1); //calling 1 (ch4 sensor on ads1)
+  float ch4Volt = ads1.computeVolts(ch4);
+
+  char voltageStr[8]; // Buffer for the string
+  dtostrf(ch4Volt, 1, 4, voltageStr); // Min width 1, 4 decimal places
+
+  pCharacteristic->setValue(voltageStr);
+  pCharacteristic->notify();
+    Serial.println(ch4Volt);
     delay(500);
   }
   // disconnecting
