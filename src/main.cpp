@@ -41,22 +41,26 @@ uint32_t value = 0;
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
 
-//Here we are creating a servcie for Environmental Sensing Service (ESS) - standardised UUID for ESS https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf
+// Here we are creating a servcie for Environmental Sensing Service (ESS) - standardised UUID for ESS https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf
 #define SERVICE_UUID (BLEUUID((uint16_t)0x181A))
 
-//Here we are creating a methane characteristic (standartised UUID for methane https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf )
+// Here we are creating a methane characteristic (standartised UUID for methane https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf )
 #define CHARACTERISTIC_UUID_METHANE (BLEUUID((uint16_t)0x2BD1))
 
-//here we are creating an object for the ADS
-Adafruit_ADS1015 ads1; 
-void setUpMEMS() {
-ads1.begin(0x48);
+// here we are creating an object for the ADS
+Adafruit_ADS1015 ads1;
+void setUpMEMS()
+{
+  ads1.begin(0x48);
 }
-//Here is a function to initialize the MEMS sensor (only ads1)
-void initMEMS(){
- if (!ads1.begin(0x48)) {
+// Here is a function to initialize the MEMS sensor (only ads1)
+void initMEMS()
+{
+  if (!ads1.begin(0x48))
+  {
     Serial.println("Could not find ADS1015 at 0x48");
-    while (1);
+    while (1)
+      ;
   }
 }
 
@@ -84,7 +88,6 @@ void setup()
   // Create the BLE Server
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
-
 
   // Create the BLE Service
   BLEService *pService = pServer->createService(SERVICE_UUID);
@@ -119,16 +122,16 @@ void loop()
   // here we are printing methane value
   if (deviceConnected)
   {
-  int16_t  ch4 = ads1.readADC_SingleEnded(1); //calling 1 (ch4 sensor on ads1)
-  float ch4Volt = ads1.computeVolts(ch4);
+    int16_t ch4 = ads1.readADC_SingleEnded(1); // calling 1 (ch4 sensor on ads1)
+    float ch4Volt = ads1.computeVolts(ch4);
 
-  char voltageStr[8]; // Buffer for the string
-  dtostrf(ch4Volt, 1, 4, voltageStr); // Min width 1, 4 decimal places
+    char voltageStr[8];                 // Buffer for the string
+    dtostrf(ch4Volt, 1, 4, voltageStr); // Min width 1, 4 decimal places
 
-  pCharacteristic->setValue(voltageStr);
-  pCharacteristic->notify();
+    pCharacteristic->setValue(voltageStr);
+    pCharacteristic->notify();
     Serial.println(ch4Volt);
-    delay(500);
+    delay(5000);
   }
   // disconnecting
   if (!deviceConnected && oldDeviceConnected)
