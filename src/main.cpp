@@ -211,7 +211,7 @@ int16_t vocRaw = ads1.readADC_SingleEnded(2);
     nh3Characteristic->setValue((uint8_t*)&nh3Volt, sizeof(nh3Volt));
     nh3Characteristic->notify();
     // we are sending the values every second
-    delay(1000);
+    delay(5000);
   }
   // disconnecting
   if (!deviceConnected && oldDeviceConnected)
