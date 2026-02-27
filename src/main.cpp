@@ -57,35 +57,67 @@ BLECharacteristic *coCharacteristic = NULL;
 BLECharacteristic *smokeCharacteristic = NULL;
 BLECharacteristic *h2Characteristic = NULL;
 
-// here we are creating an object for the ADS
-Adafruit_ADS1015 ads1, ads2, ads3; // we are using two ADS1015 to have more channels
-void setUpMEMS()
+// Board structure to hold information about each ADS1015 board
+struct Board
 {
-  ads1.begin(0x48);
-  ads2.begin(0x49);
-  ads3.begin(0x4A);
+  Adafruit_ADS1015 ads;
+  uint8_t i2c_address;
+  bool present;
+};
+
+constexpr size_t boardCount = 3;
+constexpr uint8_t boardAds1 = 0;
+constexpr uint8_t boardAds2 = 1;
+constexpr uint8_t boardAds3 = 2;
+
+// Array of boards
+Board boards[boardCount] = {
+    {Adafruit_ADS1015(), 0x48, false},
+    {Adafruit_ADS1015(), 0x49, false},
+    {Adafruit_ADS1015(), 0x4A, false}};
+
+// Function to get a board by number
+Board *getBoard(uint8_t board_num)
+{
+  if (board_num < boardCount)
+  {
+    return &boards[board_num];
+  }
+  return NULL;
 }
 
-// Here is a function to initialize the MEMS sensor
+// Here is a function to initialize the MEMS sensor and detect which boards are present
 void initMEMS()
 {
-  if (!ads1.begin(0x48))
+  for (size_t i = 0; i < boardCount; i++)
   {
-    Serial.println("Could not find ADS1015 at 0x48");
-    while (1)
-      ;
+    if (boards[i].ads.begin(boards[i].i2c_address))
+    {
+      boards[i].present = true;
+      Serial.print("Found ADS1015 at 0x");
+      Serial.println(boards[i].i2c_address, HEX);
+    }
+    else
+    {
+      Serial.print("ADS1015 not found at 0x");
+      Serial.println(boards[i].i2c_address, HEX);
+    }
   }
-  if (!ads2.begin(0x49))
+
+  // Check if at least one board is present
+  bool any_present = false;
+  for (size_t i = 0; i < boardCount; i++)
   {
-    Serial.println("Could not find ADS1015 at 0x49");
-    while (1)
-      ;
+    if (boards[i].present)
+    {
+      any_present = true;
+      break;
+    }
   }
-  if (!ads3.begin(0x4A))
+
+  if (!any_present)
   {
-    Serial.println("Could not find ADS1015 at 0x4A");
-    while (1)
-      ;
+    Serial.println("ERROR: No ADS1015 boards found!");
   }
 }
 
@@ -123,61 +155,70 @@ void setup()
 
   // these are for ESS standardised characteristics
   // Taken partially from https://www.bluetooth.com/specifications/assigned-numbers/
-  ch4Characteristic = essService->createCharacteristic(
-      BLEUUID((uint16_t)0x2BD1),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  ch4Characteristic->addDescriptor(new BLE2902());
+  if (getBoard(boardAds1)->present)
+  {
+    ch4Characteristic = essService->createCharacteristic(
+        BLEUUID((uint16_t)0x2BD1),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    ch4Characteristic->addDescriptor(new BLE2902());
 
-  vocCharacteristic = essService->createCharacteristic(
-      BLEUUID((uint16_t)0x2BD3),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  vocCharacteristic->addDescriptor(new BLE2902());
+    vocCharacteristic = essService->createCharacteristic(
+        BLEUUID((uint16_t)0x2BD3),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    vocCharacteristic->addDescriptor(new BLE2902());
 
-  nh3Characteristic = essService->createCharacteristic(
-      BLEUUID((uint16_t)0x2BCF),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  nh3Characteristic->addDescriptor(new BLE2902());
+    nh3Characteristic = essService->createCharacteristic(
+        BLEUUID((uint16_t)0x2BCF),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    nh3Characteristic->addDescriptor(new BLE2902());
 
-  no2Characteristic = essService->createCharacteristic( // Fixed name
-      BLEUUID((uint16_t)0x2BD2),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  no2Characteristic->addDescriptor(new BLE2902());
+    no2Characteristic = essService->createCharacteristic( // Fixed name
+        BLEUUID((uint16_t)0x2BD2),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    no2Characteristic->addDescriptor(new BLE2902());
 
-  // these are for custom characteristics, generated at https://www.uuidgenerator.net/guid
-  hchoCharacteristic = customService->createCharacteristic(
-      BLEUUID("6a135b89-f360-4f64-86fc-5a14092034b4"),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  hchoCharacteristic->addDescriptor(new BLE2902());
+    // these are for custom characteristics, generated at https://www.uuidgenerator.net/guid (ADS1 sensors)
+    hchoCharacteristic = customService->createCharacteristic(
+        BLEUUID("6a135b89-f360-4f64-86fc-5a14092034b4"),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    hchoCharacteristic->addDescriptor(new BLE2902());
 
-  odorCharacteristic = customService->createCharacteristic(
-      BLEUUID("4c28fcb8-d69b-404a-8668-41655d814e7f"),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  odorCharacteristic->addDescriptor(new BLE2902());
+    odorCharacteristic = customService->createCharacteristic(
+        BLEUUID("4c28fcb8-d69b-404a-8668-41655d814e7f"),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    odorCharacteristic->addDescriptor(new BLE2902());
+  }
 
-  etohCharacteristic = customService->createCharacteristic(
-      BLEUUID("f8156843-6d98-4ba2-8014-1cf03d7dedb8"),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  etohCharacteristic->addDescriptor(new BLE2902());
+  if (getBoard(boardAds2)->present)
+  {
+    etohCharacteristic = customService->createCharacteristic(
+        BLEUUID("f8156843-6d98-4ba2-8014-1cf03d7dedb8"),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    etohCharacteristic->addDescriptor(new BLE2902());
 
-  h2sCharacteristic = customService->createCharacteristic(
-      BLEUUID("87dc71bd-29a4-4218-a2a7-83fd2a69cc40"),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  h2sCharacteristic->addDescriptor(new BLE2902());
+    h2sCharacteristic = customService->createCharacteristic(
+        BLEUUID("87dc71bd-29a4-4218-a2a7-83fd2a69cc40"),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    h2sCharacteristic->addDescriptor(new BLE2902());
+  }
 
-  coCharacteristic = customService->createCharacteristic(
-      BLEUUID("88f6fa6c-c4e0-4a3d-ba72-f435641251c4"),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  coCharacteristic->addDescriptor(new BLE2902());
+  if (getBoard(boardAds3)->present)
+  {
+    coCharacteristic = customService->createCharacteristic(
+        BLEUUID("88f6fa6c-c4e0-4a3d-ba72-f435641251c4"),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    coCharacteristic->addDescriptor(new BLE2902());
 
-  smokeCharacteristic = customService->createCharacteristic(
-      BLEUUID("cafb955e-6e7b-424b-9e03-6d8d003aa286"),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  smokeCharacteristic->addDescriptor(new BLE2902());
+    smokeCharacteristic = customService->createCharacteristic(
+        BLEUUID("cafb955e-6e7b-424b-9e03-6d8d003aa286"),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    smokeCharacteristic->addDescriptor(new BLE2902());
 
-  h2Characteristic = customService->createCharacteristic(
-      BLEUUID("0176655b-0007-4e02-abc1-e9f2d6815f46"),
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  h2Characteristic->addDescriptor(new BLE2902());
+    h2Characteristic = customService->createCharacteristic(
+        BLEUUID("0176655b-0007-4e02-abc1-e9f2d6815f46"),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    h2Characteristic->addDescriptor(new BLE2902());
+  }
 
   // we are starting both services
   essService->start();
@@ -199,74 +240,131 @@ void loop()
 {
   if (deviceConnected)
   {
-    // Read raw ADC value for formaldehyde
-    int16_t hchoRaw = ads1.readADC_SingleEnded(0);
-    // Converting to voltage using the function from the library
-    float hchoVolt = ads1.computeVolts(hchoRaw);
-    // Here we are sending the voltage value as float
-    hchoCharacteristic->setValue((uint8_t *)&hchoVolt, sizeof(hchoVolt));
-    // Send float value directly over BLE (4 bytes)
-    hchoCharacteristic->notify();
+    // Read from board 0 (ADS1) sensors if present
+    if (getBoard(boardAds1)->present)
+    {
+      Board *board = getBoard(boardAds1);
+      // Read raw ADC value for formaldehyde
+      int16_t hchoRaw = board->ads.readADC_SingleEnded(0);
+      // Converting to voltage using the function from the library
+      float hchoVolt = board->ads.computeVolts(hchoRaw);
+      // Here we are sending the voltage value as float
+      if (hchoCharacteristic != NULL)
+      {
+        hchoCharacteristic->setValue((uint8_t *)&hchoVolt, sizeof(hchoVolt));
+        // Send float value directly over BLE (4 bytes)
+        hchoCharacteristic->notify();
+      }
 
-    // do the same for the rest of the sensors
-    int16_t ch4Raw = ads1.readADC_SingleEnded(1);
-    float ch4Volt = ads1.computeVolts(ch4Raw);
-    ch4Characteristic->setValue((uint8_t *)&ch4Volt, sizeof(ch4Volt));
-    ch4Characteristic->notify();
+      // CH4 sensor
+      int16_t ch4Raw = board->ads.readADC_SingleEnded(1);
+      float ch4Volt = board->ads.computeVolts(ch4Raw);
+      if (ch4Characteristic != NULL)
+      {
+        ch4Characteristic->setValue((uint8_t *)&ch4Volt, sizeof(ch4Volt));
+        ch4Characteristic->notify();
+      }
 
-    int16_t vocRaw = ads1.readADC_SingleEnded(2);
-    float vocVolt = ads1.computeVolts(vocRaw);
-    vocCharacteristic->setValue((uint8_t *)&vocVolt, sizeof(vocVolt));
-    vocCharacteristic->notify();
+      // VOC sensor
+      int16_t vocRaw = board->ads.readADC_SingleEnded(2);
+      float vocVolt = board->ads.computeVolts(vocRaw);
+      if (vocCharacteristic != NULL)
+      {
+        vocCharacteristic->setValue((uint8_t *)&vocVolt, sizeof(vocVolt));
+        vocCharacteristic->notify();
+      }
 
-    int16_t odorRaw = ads1.readADC_SingleEnded(3);
-    float odorVolt = ads1.computeVolts(odorRaw);
-    odorCharacteristic->setValue((uint8_t *)&odorVolt, sizeof(odorVolt));
-    odorCharacteristic->notify();
+      // Odor sensor
+      int16_t odorRaw = board->ads.readADC_SingleEnded(3);
+      float odorVolt = board->ads.computeVolts(odorRaw);
+      if (odorCharacteristic != NULL)
+      {
+        odorCharacteristic->setValue((uint8_t *)&odorVolt, sizeof(odorVolt));
+        odorCharacteristic->notify();
+      }
+    }
 
-    int16_t etohRaw = ads2.readADC_SingleEnded(0);
-    float etohVolt = ads2.computeVolts(etohRaw);
-    etohCharacteristic->setValue((uint8_t *)&etohVolt, sizeof(etohVolt));
-    etohCharacteristic->notify();
+    // Read from board 1 (ADS2) sensors if present
+    if (getBoard(boardAds2)->present)
+    {
+      Board *board = getBoard(boardAds2);
+      // Ethanol sensor
+      int16_t etohRaw = board->ads.readADC_SingleEnded(0);
+      float etohVolt = board->ads.computeVolts(etohRaw);
+      if (etohCharacteristic != NULL)
+      {
+        etohCharacteristic->setValue((uint8_t *)&etohVolt, sizeof(etohVolt));
+        etohCharacteristic->notify();
+      }
 
-    int16_t h2sRaw = ads2.readADC_SingleEnded(1);
-    float h2sVolt = ads2.computeVolts(h2sRaw);
-    h2sCharacteristic->setValue((uint8_t *)&h2sVolt, sizeof(h2sVolt));
-    h2sCharacteristic->notify();
+      // H2S sensor
+      int16_t h2sRaw = board->ads.readADC_SingleEnded(1);
+      float h2sVolt = board->ads.computeVolts(h2sRaw);
+      if (h2sCharacteristic != NULL)
+      {
+        h2sCharacteristic->setValue((uint8_t *)&h2sVolt, sizeof(h2sVolt));
+        h2sCharacteristic->notify();
+      }
 
-    int16_t no2Raw = ads2.readADC_SingleEnded(2);
-    float no2Volt = ads2.computeVolts(no2Raw);
-    no2Characteristic->setValue((uint8_t *)&no2Volt, sizeof(no2Volt));
-    no2Characteristic->notify();
+      // NO2 sensor
+      int16_t no2Raw = board->ads.readADC_SingleEnded(2);
+      float no2Volt = board->ads.computeVolts(no2Raw);
+      if (no2Characteristic != NULL)
+      {
+        no2Characteristic->setValue((uint8_t *)&no2Volt, sizeof(no2Volt));
+        no2Characteristic->notify();
+      }
 
-    int16_t nh3Raw = ads2.readADC_SingleEnded(3);
-    float nh3Volt = ads2.computeVolts(nh3Raw);
-    nh3Characteristic->setValue((uint8_t *)&nh3Volt, sizeof(nh3Volt));
-    nh3Characteristic->notify();
+      // NH3 sensor
+      int16_t nh3Raw = board->ads.readADC_SingleEnded(3);
+      float nh3Volt = board->ads.computeVolts(nh3Raw);
+      if (nh3Characteristic != NULL)
+      {
+        nh3Characteristic->setValue((uint8_t *)&nh3Volt, sizeof(nh3Volt));
+        nh3Characteristic->notify();
+      }
+    }
 
-    int16_t coRaw = ads3.readADC_SingleEnded(0);
-    float coVolt = ads3.computeVolts(coRaw);
-    coCharacteristic->setValue((uint8_t *)&coVolt, sizeof(coVolt));
-    coCharacteristic->notify();
+    // Read from board 2 (ADS3) sensors if present
+    if (getBoard(boardAds3)->present)
+    {
+      Board *board = getBoard(boardAds3);
+      // CO sensor
+      int16_t coRaw = board->ads.readADC_SingleEnded(0);
+      float coVolt = board->ads.computeVolts(coRaw);
+      if (coCharacteristic != NULL)
+      {
+        coCharacteristic->setValue((uint8_t *)&coVolt, sizeof(coVolt));
+        coCharacteristic->notify();
+      }
 
-    int16_t smokeRaw = ads3.readADC_SingleEnded(1);
-    float smokeVolt = ads3.computeVolts(smokeRaw);
-    smokeCharacteristic->setValue((uint8_t *)&smokeVolt, sizeof(smokeVolt));
-    smokeCharacteristic->notify();
+      // Smoke sensor
+      int16_t smokeRaw = board->ads.readADC_SingleEnded(1);
+      float smokeVolt = board->ads.computeVolts(smokeRaw);
+      if (smokeCharacteristic != NULL)
+      {
+        smokeCharacteristic->setValue((uint8_t *)&smokeVolt, sizeof(smokeVolt));
+        smokeCharacteristic->notify();
+      }
 
-    int16_t h2Raw = ads3.readADC_SingleEnded(2);
-    float h2Volt = ads3.computeVolts(h2Raw);
-    h2Characteristic->setValue((uint8_t *)&h2Volt, sizeof(h2Volt));
-    h2Characteristic->notify();
+      // H2 sensor
+      int16_t h2Raw = board->ads.readADC_SingleEnded(2);
+      float h2Volt = board->ads.computeVolts(h2Raw);
+      if (h2Characteristic != NULL)
+      {
+        h2Characteristic->setValue((uint8_t *)&h2Volt, sizeof(h2Volt));
+        h2Characteristic->notify();
+      }
 
-    Serial.print("CO:");
-    Serial.print(coVolt);
-    Serial.print(",Smoke:");
-    Serial.print(smokeVolt);
-    Serial.print(",H2:");
-    Serial.println(h2Volt);
+      Serial.print("CO:");
+      Serial.print(coVolt);
+      Serial.print(",Smoke:");
+      Serial.print(smokeVolt);
+      Serial.print(",H2:");
+      Serial.println(h2Volt);
+    }
 
-    // we are sending the values every second
+    // we are sending the values every 5 seconds
     delay(5000);
   }
   // disconnecting
