@@ -30,6 +30,7 @@
 #include <SD.h>
 #include <Wire.h>
 #include <Adafruit_ADS1X15.h>
+#include <Adafruit_BME680.h>
 
 BLEServer *pServer = NULL;
 // BLE2901 *descriptor_2901 = NULL;
@@ -56,6 +57,13 @@ BLECharacteristic *h2sCharacteristic = NULL;
 BLECharacteristic *coCharacteristic = NULL;
 BLECharacteristic *smokeCharacteristic = NULL;
 BLECharacteristic *h2Characteristic = NULL;
+
+// BME680 environmental sensor characteristics
+BLECharacteristic *temperatureCharacteristic = NULL;
+BLECharacteristic *pressureCharacteristic = NULL;
+BLECharacteristic *humidityCharacteristic = NULL;
+BLECharacteristic *gasCharacteristic = NULL;
+BLECharacteristic *altitudeCharacteristic = NULL;
 
 // Board structure to hold information about each ADS1015 board
 struct Board
@@ -84,6 +92,30 @@ Board *getBoard(uint8_t board_num)
     return &boards[board_num];
   }
   return NULL;
+}
+
+// BME680 environmental sensor
+Adafruit_BME680 bme680;
+bool bme680_present = false;
+
+// Initialize BME680 sensor and detect if present
+void initBME680()
+{
+  if (!bme680.begin(0x77))  // Default I2C address
+  {
+    if (!bme680.begin(0x76))  // Alternative I2C address
+    {
+      Serial.println("BME680 not found!");
+      return;
+    }
+  }
+
+  bme680_present = true;
+  Serial.println("Found BME680 sensor");
+
+  // Set up oversampling and filter initialization
+  bme680.setIIRFilterSize(BME680_FILTER_SIZE_3);
+  bme680.setGasHeater(320, 150);  // 320°C for 150 ms
 }
 
 // Here is a function to initialize the MEMS sensor and detect which boards are present
@@ -139,6 +171,7 @@ void setup()
   Serial.begin(115200);
 
   initMEMS();
+  initBME680();
   // Create the BLE Device
   BLEDevice::init("esp32");
   // this is for increasing the MTU size - default is 23 bytes, we can set it up to 517 bytes
@@ -218,6 +251,40 @@ void setup()
         BLEUUID("0176655b-0007-4e02-abc1-e9f2d6815f46"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     h2Characteristic->addDescriptor(new BLE2902());
+  }
+
+  // Create characteristics for BME680 environmental sensor if present
+  if (bme680_present)
+  {
+    // Temperature (ESS standard UUID 0x2A6E)
+    temperatureCharacteristic = essService->createCharacteristic(
+        BLEUUID((uint16_t)0x2A6E),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    temperatureCharacteristic->addDescriptor(new BLE2902());
+
+    // Pressure (ESS standard UUID 0x2A6D)
+    pressureCharacteristic = essService->createCharacteristic(
+        BLEUUID((uint16_t)0x2A6D),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    pressureCharacteristic->addDescriptor(new BLE2902());
+
+    // Humidity (ESS standard UUID 0x2A6F)
+    humidityCharacteristic = essService->createCharacteristic(
+        BLEUUID((uint16_t)0x2A6F),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    humidityCharacteristic->addDescriptor(new BLE2902());
+
+    // Altitude (ESS standard UUID 0x2A69)
+    altitudeCharacteristic = essService->createCharacteristic(
+        BLEUUID((uint16_t)0x2A69),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    altitudeCharacteristic->addDescriptor(new BLE2902());
+
+    // Gas resistance (custom UUID)
+    gasCharacteristic = customService->createCharacteristic(
+        BLEUUID("5b0e3c0b-1a44-4b76-82ee-8c2adc2dd8e9"),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    gasCharacteristic->addDescriptor(new BLE2902());
   }
 
   // we are starting both services
@@ -362,6 +429,70 @@ void loop()
       Serial.print(smokeVolt);
       Serial.print(",H2:");
       Serial.println(h2Volt);
+    }
+
+    // Read from BME680 sensor if present
+    if (bme680_present)
+    {
+      if (bme680.performReading())
+      {
+        // Read temperature
+        float temperature = bme680.temperature;
+        if (temperatureCharacteristic != NULL)
+        {
+          temperatureCharacteristic->setValue((uint8_t *)&temperature, sizeof(temperature));
+          temperatureCharacteristic->notify();
+        }
+
+        // Read pressure (convert from Pa to hPa for BLE)
+        float pressure = bme680.pressure / 100.0;
+        if (pressureCharacteristic != NULL)
+        {
+          pressureCharacteristic->setValue((uint8_t *)&pressure, sizeof(pressure));
+          pressureCharacteristic->notify();
+        }
+
+        // Read humidity
+        float humidity = bme680.humidity;
+        if (humidityCharacteristic != NULL)
+        {
+          humidityCharacteristic->setValue((uint8_t *)&humidity, sizeof(humidity));
+          humidityCharacteristic->notify();
+        }
+
+        // Read gas resistance
+        float gas = bme680.gas_resistance;
+        if (gasCharacteristic != NULL)
+        {
+          gasCharacteristic->setValue((uint8_t *)&gas, sizeof(gas));
+          gasCharacteristic->notify();
+        }
+
+        // Calculate and read altitude (assuming sea level pressure of 1013.25 hPa)
+        float altitude = bme680.readAltitude(1013.25);
+        if (altitudeCharacteristic != NULL)
+        {
+          altitudeCharacteristic->setValue((uint8_t *)&altitude, sizeof(altitude));
+          altitudeCharacteristic->notify();
+        }
+
+        // Debug output
+        Serial.print("Temperature:");
+        Serial.print(temperature);
+        Serial.print(" C, Pressure:");
+        Serial.print(pressure);
+        Serial.print(" hPa, Humidity:");
+        Serial.print(humidity);
+        Serial.print(" %, Gas:");
+        Serial.print(gas);
+        Serial.print(" Ohms, Altitude:");
+        Serial.print(altitude);
+        Serial.println(" m");
+      }
+      else
+      {
+        Serial.println("BME680 reading failed");
+      }
     }
 
     // we are sending the values every 5 seconds
