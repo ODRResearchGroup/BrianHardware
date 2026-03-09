@@ -31,6 +31,7 @@
 #include <Wire.h>
 #include <Adafruit_ADS1X15.h>
 #include <Adafruit_BME680.h>
+#include <sys/time.h>
 
 BLEServer *pServer = NULL;
 // BLE2901 *descriptor_2901 = NULL;
@@ -46,14 +47,19 @@ bool oldDeviceConnected = false;
 #define CUSTOM_SERVICE_UUID "de664a17-7db4-449f-97ba-5514e19a9d94" // custom service
 
 // create characteristics for each gas sensor
+// Board 1 (ADS1) sensors
 BLECharacteristic *ch4Characteristic = NULL;
 BLECharacteristic *vocCharacteristic = NULL;
-BLECharacteristic *nh3Characteristic = NULL;
-BLECharacteristic *no2Characteristic = NULL;
 BLECharacteristic *hchoCharacteristic = NULL;
 BLECharacteristic *odorCharacteristic = NULL;
+
+// Board 2 (ADS2) sensors
+BLECharacteristic *nh3Characteristic = NULL;
+BLECharacteristic *no2Characteristic = NULL;
 BLECharacteristic *etohCharacteristic = NULL;
 BLECharacteristic *h2sCharacteristic = NULL;
+
+// Board 3 (ADS3) sensors
 BLECharacteristic *coCharacteristic = NULL;
 BLECharacteristic *smokeCharacteristic = NULL;
 BLECharacteristic *h2Characteristic = NULL;
@@ -64,6 +70,9 @@ BLECharacteristic *pressureCharacteristic = NULL;
 BLECharacteristic *humidityCharacteristic = NULL;
 BLECharacteristic *gasCharacteristic = NULL;
 BLECharacteristic *altitudeCharacteristic = NULL;
+
+// Time synchronization characteristic
+BLECharacteristic *timeSyncCharacteristic = NULL;
 
 // Board structure to hold information about each ADS1015 board
 struct Board
@@ -101,9 +110,9 @@ bool bme680_present = false;
 // Initialize BME680 sensor and detect if present
 void initBME680()
 {
-  if (!bme680.begin(0x77))  // Default I2C address
+  if (!bme680.begin(0x77)) // Default I2C address
   {
-    if (!bme680.begin(0x76))  // Alternative I2C address
+    if (!bme680.begin(0x76)) // Alternative I2C address
     {
       Serial.println("BME680 not found!");
       return;
@@ -115,7 +124,7 @@ void initBME680()
 
   // Set up oversampling and filter initialization
   bme680.setIIRFilterSize(BME680_FILTER_SIZE_3);
-  bme680.setGasHeater(320, 150);  // 320°C for 150 ms
+  bme680.setGasHeater(320, 150); // 320°C for 150 ms
 }
 
 // Here is a function to initialize the MEMS sensor and detect which boards are present
@@ -153,6 +162,69 @@ void initMEMS()
   }
 }
 
+// Helper function to add BLE2902 descriptor for notifications
+void setupCCCDDescriptor(BLECharacteristic *characteristic)
+{
+  // Add the Client Characteristic Configuration Descriptor (CCCD)
+  BLE2902 *descriptor = new BLE2902();
+  // Set read and write permissions on the descriptor to allow CCCD negotiation
+  // descriptor->setAccessPermissions(ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE);
+  characteristic->addDescriptor(descriptor);
+}
+
+// Callback class for handling time synchronization writes
+class TimeSyncCallbacks : public BLECharacteristicCallbacks
+{
+  void onWrite(BLECharacteristic *pCharacteristic)
+  {
+    uint8_t *data = pCharacteristic->getData();
+    size_t length = pCharacteristic->getLength();
+
+    if (length == 8) // Expecting 8 bytes for uint64_t Unix timestamp
+    {
+      // Extract Unix timestamp (seconds since epoch)
+      uint64_t timestamp;
+      memcpy(&timestamp, data, 8);
+
+      // Set system time
+      struct timeval tv;
+      tv.tv_sec = timestamp;
+      tv.tv_usec = 0;
+      settimeofday(&tv, NULL);
+
+      // Print confirmation
+      Serial.print("RTC synchronized to: ");
+      Serial.println((unsigned long)timestamp);
+
+      // Print human-readable time
+      time_t now = timestamp;
+      struct tm timeinfo;
+      localtime_r(&now, &timeinfo);
+      char strftime_buf[64];
+      strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+      Serial.print("Local time: ");
+      Serial.println(strftime_buf);
+    }
+    else if (length == 4) // Alternative: 4 bytes for uint32_t
+    {
+      uint32_t timestamp;
+      memcpy(&timestamp, data, 4);
+
+      struct timeval tv;
+      tv.tv_sec = timestamp;
+      tv.tv_usec = 0;
+      settimeofday(&tv, NULL);
+
+      Serial.print("RTC synchronized to: ");
+      Serial.println(timestamp);
+    }
+    else
+    {
+      Serial.println("Invalid time sync data length");
+    }
+  }
+};
+
 class MyServerCallbacks : public BLEServerCallbacks
 {
   void onConnect(BLEServer *pServer)
@@ -173,7 +245,7 @@ void setup()
   initMEMS();
   initBME680();
   // Create the BLE Device
-  BLEDevice::init("esp32");
+  BLEDevice::init("BRIAN");
   // this is for increasing the MTU size - default is 23 bytes, we can set it up to 517 bytes
   BLEDevice::setMTU(517);
 
@@ -181,9 +253,11 @@ void setup()
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
-  // Create the BLE Service both ESS and custom
-  BLEService *essService = pServer->createService(SERVICE_UUID);
-  BLEService *customService = pServer->createService(CUSTOM_SERVICE_UUID);
+  // Create BLE services with enough handles for all characteristics + CCCDs.
+  // Default is 15 handles, which is too small for this profile and can cause
+  // later characteristics to miss descriptors (e.g. missing CCCD).
+  BLEService *essService = pServer->createService(SERVICE_UUID, 40);
+  BLEService *customService = pServer->createService(BLEUUID(CUSTOM_SERVICE_UUID), 50);
   // Create characteristics
 
   // these are for ESS standardised characteristics
@@ -193,46 +267,47 @@ void setup()
     ch4Characteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2BD1),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    ch4Characteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(ch4Characteristic);
 
     vocCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2BD3),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    vocCharacteristic->addDescriptor(new BLE2902());
-
-    nh3Characteristic = essService->createCharacteristic(
-        BLEUUID((uint16_t)0x2BCF),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    nh3Characteristic->addDescriptor(new BLE2902());
-
-    no2Characteristic = essService->createCharacteristic( // Fixed name
-        BLEUUID((uint16_t)0x2BD2),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    no2Characteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(vocCharacteristic);
 
     // these are for custom characteristics, generated at https://www.uuidgenerator.net/guid (ADS1 sensors)
     hchoCharacteristic = customService->createCharacteristic(
         BLEUUID("6a135b89-f360-4f64-86fc-5a14092034b4"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    hchoCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(hchoCharacteristic);
 
     odorCharacteristic = customService->createCharacteristic(
         BLEUUID("4c28fcb8-d69b-404a-8668-41655d814e7f"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    odorCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(odorCharacteristic);
   }
 
   if (getBoard(boardAds2)->present)
   {
+
+    nh3Characteristic = essService->createCharacteristic(
+        BLEUUID((uint16_t)0x2BCF),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    setupCCCDDescriptor(nh3Characteristic);
+
+    no2Characteristic = essService->createCharacteristic( // Fixed name
+        BLEUUID((uint16_t)0x2BD2),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    setupCCCDDescriptor(no2Characteristic);
+
     etohCharacteristic = customService->createCharacteristic(
         BLEUUID("f8156843-6d98-4ba2-8014-1cf03d7dedb8"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    etohCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(etohCharacteristic);
 
     h2sCharacteristic = customService->createCharacteristic(
         BLEUUID("87dc71bd-29a4-4218-a2a7-83fd2a69cc40"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    h2sCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(h2sCharacteristic);
   }
 
   if (getBoard(boardAds3)->present)
@@ -240,17 +315,17 @@ void setup()
     coCharacteristic = customService->createCharacteristic(
         BLEUUID("88f6fa6c-c4e0-4a3d-ba72-f435641251c4"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    coCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(coCharacteristic);
 
     smokeCharacteristic = customService->createCharacteristic(
         BLEUUID("cafb955e-6e7b-424b-9e03-6d8d003aa286"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    smokeCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(smokeCharacteristic);
 
     h2Characteristic = customService->createCharacteristic(
         BLEUUID("0176655b-0007-4e02-abc1-e9f2d6815f46"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    h2Characteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(h2Characteristic);
   }
 
   // Create characteristics for BME680 environmental sensor if present
@@ -260,32 +335,41 @@ void setup()
     temperatureCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2A6E),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    temperatureCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(temperatureCharacteristic);
+    Serial.println("Created Temperature characteristic with NOTIFY property");
 
     // Pressure (ESS standard UUID 0x2A6D)
     pressureCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2A6D),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    pressureCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(pressureCharacteristic);
+    Serial.println("Created Pressure characteristic with NOTIFY property");
 
     // Humidity (ESS standard UUID 0x2A6F)
     humidityCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2A6F),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    humidityCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(humidityCharacteristic);
 
     // Altitude (ESS standard UUID 0x2A69)
     altitudeCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2A69),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    altitudeCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(altitudeCharacteristic);
 
     // Gas resistance (custom UUID)
     gasCharacteristic = customService->createCharacteristic(
         BLEUUID("5b0e3c0b-1a44-4b76-82ee-8c2adc2dd8e9"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    gasCharacteristic->addDescriptor(new BLE2902());
+    setupCCCDDescriptor(gasCharacteristic);
   }
+
+  // Create time synchronization characteristic (always available)
+  // Custom UUID for time sync - client writes Unix timestamp to set RTC
+  timeSyncCharacteristic = customService->createCharacteristic(
+      BLEUUID("a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"),
+      BLECharacteristic::PROPERTY_WRITE);
+  timeSyncCharacteristic->setCallbacks(new TimeSyncCallbacks());
 
   // we are starting both services
   essService->start();
