@@ -24,6 +24,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <BLESecurity.h>
 // #include <BLE2901.h>
 
 #include <SPI.h>
@@ -34,6 +35,7 @@
 #include <sys/time.h>
 
 BLEServer *pServer = NULL;
+BLESecurity *pSecurity = NULL;
 // BLE2901 *descriptor_2901 = NULL;
 
 bool deviceConnected = false;
@@ -41,7 +43,7 @@ bool oldDeviceConnected = false;
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
 
-// Here we are creating a servcie for Environmental Sensing Service (ESS) - standardised UUID for ESS https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf
+// Here we are creating a service for the Environmental Sensing Service (ESS) – standardized ESS UUID: https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf
 #define SERVICE_UUID (BLEUUID((uint16_t)0x181A))
 // Here we are creating a custom service for sensors that do not have a standardised service
 #define CUSTOM_SERVICE_UUID "de664a17-7db4-449f-97ba-5514e19a9d94" // custom service
@@ -123,6 +125,9 @@ void initBME680()
   Serial.println("Found BME680 sensor");
 
   // Set up oversampling and filter initialization
+  bme680.setTemperatureOversampling(BME680_OS_8X);
+  bme680.setHumidityOversampling(BME680_OS_4X);
+  bme680.setPressureOversampling(BME680_OS_2X);
   bme680.setIIRFilterSize(BME680_FILTER_SIZE_3);
   bme680.setGasHeater(320, 150); // 320°C for 150 ms
 }
@@ -194,7 +199,7 @@ class TimeSyncCallbacks : public BLECharacteristicCallbacks
 
       // Print confirmation
       Serial.print("RTC synchronized to: ");
-      Serial.println((unsigned long)timestamp);
+      Serial.println((uint64_t)timestamp);
 
       // Print human-readable time
       time_t now = timestamp;
@@ -248,6 +253,13 @@ void setup()
   BLEDevice::init("BRIAN");
   // this is for increasing the MTU size - default is 23 bytes, we can set it up to 517 bytes
   BLEDevice::setMTU(517);
+
+  // Require an encrypted (bonded) link before allowing time sync writes.
+  // "Just Works" pairing provides encryption without requiring a PIN/passkey.
+  pSecurity = new BLESecurity();
+  pSecurity->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_BOND);
+  pSecurity->setCapability(ESP_IO_CAP_NONE);
+  pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
   // Create the BLE Server
   pServer = BLEDevice::createServer();
@@ -365,10 +377,13 @@ void setup()
   }
 
   // Create time synchronization characteristic (always available)
-  // Custom UUID for time sync - client writes Unix timestamp to set RTC
+  // Custom UUID for time sync - client writes Unix timestamp to set RTC.
+  // Requires an encrypted (bonded) link so only authenticated clients can
+  // change the system time.
   timeSyncCharacteristic = customService->createCharacteristic(
       BLEUUID("a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"),
       BLECharacteristic::PROPERTY_WRITE);
+  timeSyncCharacteristic->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   timeSyncCharacteristic->setCallbacks(new TimeSyncCallbacks());
 
   // we are starting both services
