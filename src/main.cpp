@@ -123,6 +123,9 @@ void initBME680()
   Serial.println("Found BME680 sensor");
 
   // Set up oversampling and filter initialization
+  bme680.setTemperatureOversampling(BME680_OS_8X);
+  bme680.setHumidityOversampling(BME680_OS_4X);
+  bme680.setPressureOversampling(BME680_OS_2X);
   bme680.setIIRFilterSize(BME680_FILTER_SIZE_3);
   bme680.setGasHeater(320, 150); // 320°C for 150 ms
 }
