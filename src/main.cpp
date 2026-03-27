@@ -194,7 +194,7 @@ class TimeSyncCallbacks : public BLECharacteristicCallbacks
 
       // Print confirmation
       Serial.print("RTC synchronized to: ");
-      Serial.println((unsigned long)timestamp);
+      Serial.println((uint64_t)timestamp);
 
       // Print human-readable time
       time_t now = timestamp;
