@@ -110,7 +110,8 @@ We want to be able to control the sensor heating element independent of the powe
 * https://share.google/srmmD0KdJVKQ4o7NJ
   
 ## Upgraded ADC
-Something like the https://www.analog.com/media/en/technical-documentation/data-sheets/2499fe.pdf, a 24-bit 16-channel ADC.
+This (https://www.ti.com/product/ADS122C14) has 8 channels, 24-bit, programmable gain up to 256.
+~~Something like the https://www.analog.com/media/en/technical-documentation/data-sheets/2499fe.pdf, a 24-bit 16-channel ADC.~~
 
 ## Replaced Controller Board
 We would attach an ESP32 directly to the PCB in future revisions.
