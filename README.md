@@ -57,7 +57,6 @@ The device advertises over BLE as `BRIAN`.
   - Prefer a supply capable of **>=1 A** to avoid brownouts during BLE + sensor operation.
 - **Battery operation (field/portable):**
   - Use a protected **3.7 V LiPo/Li-Ion (JST PH 2-pin)** pack (project reference battery: 4400 mAh).
-  - Confirm battery polarity and connector orientation before plugging in (see [hardware documentation](./hardware/README.md)).
   - Charge via the carrier board charger (MCP73831, up to 450 mA).
 - For burn-in and first commissioning, prefer wired USB power over battery to keep supply conditions stable.
 
