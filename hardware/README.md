@@ -26,6 +26,8 @@
 | ------------ | ------------------------------------ |
 | Product page | https://www.adafruit.com/product/354 |
 
+> **Polarity check:** verify battery connector polarity before plugging in. On JST PH packs, red is typically `+` and black is `-`; always confirm against board silkscreen/markings on the carrier.
+
 ## Gas Sensors (MEMS)
 
 11 analogue channels are distributed across three custom MEMS breakout boards. Each board routes four gas sensors into one **[Adafruit ADS1115](https://www.adafruit.com/product/1085)** (16-bit, 4-channel ADC). The three boards occupy I2C addresses `0x48`, `0x49`, and `0x4A`.
