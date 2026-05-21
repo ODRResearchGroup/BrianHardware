@@ -5,11 +5,12 @@ Firmware for the BRIAN e-nose hardware platform (ESP32 + MEMS gas sensors + BME6
 ## Getting Started
 
 <img src="https://github.com/user-attachments/assets/94a2b5df-399c-4010-9e0d-b9c586ea3b50" alt="Getting Started" />
+<p><em>Reference e-nose test-rig setup used for commissioning and data collection.</em></p>
 
 ### 1) Prerequisites
 - [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/index.html)
 - USB-C data cable for the SparkFun MicroMod Data Logging Carrier Board
-- Stable bench USB power source (recommended for commissioning and burn-in)
+- Stable bench USB power source (**5 V, >=1 A recommended**) for commissioning and burn-in
 
 ### 2) Build and Flash Firmware
 ```bash
@@ -31,7 +32,7 @@ The device advertises over BLE as `BRIAN`.
 1. Confirm the processor board is fully seated in the MicroMod carrier.
 2. Confirm sensor boards are connected to I2C and powered.
 3. Confirm BME680 (Qwiic) is connected.
-4. Place the device in the enclosure/test fixture shown in the image.
+4. Place the device in the enclosure/test fixture shown in the Getting Started image above.
 5. Ensure inlet/outlet airflow paths are open and unobstructed.
 6. Power on and verify startup logs:
    - ADS boards detected at `0x48`, `0x49`, `0x4A`
@@ -56,6 +57,7 @@ The device advertises over BLE as `BRIAN`.
   - Prefer a supply capable of **>=1 A** to avoid brownouts during BLE + sensor operation.
 - **Battery operation (field/portable):**
   - Use a protected **3.7 V LiPo/Li-Ion (JST PH 2-pin)** pack (project reference battery: 4400 mAh).
+  - Confirm battery polarity and connector orientation before plugging in (see [hardware documentation](./hardware/README.md)).
   - Charge via the carrier board charger (MCP73831, up to 450 mA).
 - For burn-in and first commissioning, prefer wired USB power over battery to keep supply conditions stable.
 
