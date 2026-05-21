@@ -6,26 +6,65 @@ Firmware for the BRIAN e-nose hardware platform (ESP32 + MEMS gas sensors + BME6
 
 <img src="https://github.com/user-attachments/assets/94a2b5df-399c-4010-9e0d-b9c586ea3b50" alt="Getting Started" />
 
-### Prerequisites
+### 1) Prerequisites
 - [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/index.html)
-- USB connection to the SparkFun MicroMod ESP32 board
+- USB-C data cable for the SparkFun MicroMod Data Logging Carrier Board
+- Stable bench USB power source (recommended for commissioning and burn-in)
 
-### Build
+### 2) Build and Flash Firmware
 ```bash
 pio run
 ```
 
-### Upload
 ```bash
 pio run -t upload
 ```
 
-### Serial Monitor
+### 3) Open Serial Monitor
 ```bash
 pio device monitor -b 115200
 ```
 
 The device advertises over BLE as `BRIAN`.
+
+### 4) Hardware Setup (Test Rig)
+1. Confirm the processor board is fully seated in the MicroMod carrier.
+2. Confirm sensor boards are connected to I2C and powered.
+3. Confirm BME680 (Qwiic) is connected.
+4. Place the device in the enclosure/test fixture shown in the image.
+5. Ensure inlet/outlet airflow paths are open and unobstructed.
+6. Power on and verify startup logs:
+   - ADS boards detected at `0x48`, `0x49`, `0x4A`
+   - BME680 detected at `0x77` (or fallback `0x76`)
+
+### 5) Sensor Handling and Care
+- Handle sensor PCBs by the edges only; do not touch sensor caps/membranes.
+- Avoid liquid exposure, condensation, dust, and direct contact with adhesives or oils.
+- Avoid silicone vapors, solvent fumes, or corrosive gases during storage and non-test operation.
+- Keep the enclosure clean and dry; use filtered ambient air for idle/baseline periods.
+- Avoid unnecessary power cycling; heater-based MEMS sensors are more stable when run in consistent conditions.
+- After high-concentration exposure, allow recovery time in clean air before collecting baseline/reference data.
+
+### 6) Burn-in and Warm-up
+- **Initial burn-in (new rig or replaced sensors):** run continuously in clean, well-ventilated air for **24-48 hours** before calibration/measurement campaigns.
+- **Session warm-up:** allow at least **30-60 minutes** after power-on before recording critical measurements.
+- Track baseline drift during burn-in/warm-up and start formal runs only after readings stabilize.
+
+### 7) Power Requirements and Recommendations
+- **USB operation (recommended for bench/testing):**
+  - Use the carrier board USB-C input with a stable **5 V** source.
+  - Prefer a supply capable of **>=1 A** to avoid brownouts during BLE + sensor operation.
+- **Battery operation (field/portable):**
+  - Use a protected **3.7 V LiPo/Li-Ion (JST PH 2-pin)** pack (project reference battery: 4400 mAh).
+  - Charge via the carrier board charger (MCP73831, up to 450 mA).
+- For burn-in and first commissioning, prefer wired USB power over battery to keep supply conditions stable.
+
+### 8) Bring-up Checklist Before Data Collection
+- Firmware flashed and serial output healthy
+- All expected sensors detected
+- BLE device `BRIAN` visible
+- Burn-in/warm-up complete
+- Baseline in clean air recorded
 
 ## Viewing Data
 
