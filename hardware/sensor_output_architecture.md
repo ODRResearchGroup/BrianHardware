@@ -1,6 +1,6 @@
 # Sensor Readout Architecture: MUX Design Decision
 
-**Status:** Decided — Hybrid (buffer-first)  
+**Status:** Decided — Hybrid B (buffer-first, passive RC anti-aliasing, no active LPF)  
 **Applies to:** BRIAN 2.0 14-sensor array  
 **Relates to:** [V2_design.md](V2_design.md)
 
@@ -14,7 +14,7 @@ A 16:1 analog MUX placed directly at the sensor outputs, routing all 14 sensor s
 
 ## Decision Summary
 
-**Do not place the MUX directly at the sensor outputs.** Use a **hybrid architecture**: a unity-gain buffer close to each sensor, a 16:1 MUX downstream of the buffers, and a single shared gain stage feeding one ADC channel.
+**Do not place the MUX directly at the sensor outputs.** Use **Hybrid B**: a unity-gain buffer close to each sensor, a 16:1 MUX downstream of the buffers, a passive RC anti-aliasing filter, and one ADC channel. No active LPF or gain stage is required.
 
 This preserves measurement quality while still capturing most of the cost, footprint, and ADC-channel savings offered by the MUX proposal.
 
@@ -70,7 +70,7 @@ With Z_source in the high-kΩ range at low gas concentration, leakage error alon
 
 ---
 
-## Recommended Architecture: Hybrid (Buffer-First)
+## Recommended Architecture: Hybrid B (Buffer-First, Passive RC)
 
 ```
 Each sensor:
@@ -80,12 +80,26 @@ Each sensor:
                                     ↓
                             16:1 Analog MUX
                                     ↓
-                         Gain stage (PGA or fixed-gain op-amp)
+                         Passive RC filter (1 kΩ + 100 nF)
                                     ↓
                          Single ADC channel (ADS122C14)
 ```
 
-The unity buffer converts the high sensor source impedance to ~100 Ω before any long trace routing. The MUX, gain stage, and ADC are then centralised and share a single channel.
+The unity buffer converts the high sensor source impedance to ~100 Ω before any long trace routing. The MUX, passive RC, and ADC are centralised. The ADS122C14's internal programmable gain (up to 128×) handles any gain requirement per measurement.
+
+### Why no active LPF
+
+The original fully-distributed design included an active low-pass filter per sensor as a precautionary measure against heater and supply noise. This is not needed in BRIAN 2.0 for three reasons:
+
+1. **The heater supply noise is already handled.** The LC post-filter on each buck converter output (see `heater_power.md`) reduces V_H ripple to sub-millivolt levels before it reaches the sensor heater pins.
+
+2. **The ADS122C14's delta-sigma filter provides inherent noise rejection.** At 20 SPS, each conversion integrates over 50 ms — averaging across 500 cycles of a 10 kHz heater PWM signal. The sinc⁴ filter provides >100 dB rejection of periodic noise well above the output data rate. This eliminates the need for an analog LPF to reject heater switching frequencies.
+
+3. **Synchronised sampling avoids switching transients.** When using PWM to set intermediate heater temperatures, the MCU triggers the ADC conversion after the first few microseconds of a PWM ON-phase, once the switching transient has decayed. Only steady-state readings are captured.
+
+The passive RC (1 kΩ + 100 nF, f_c ≈ 1.3 kHz) serves purely as an **anti-aliasing filter** to prevent large transients from overdriving the ADC input during MUX switching. It is not a noise filter.
+
+**If prototyping reveals residual heater-coupling noise** that the delta-sigma filter and synchronised sampling do not adequately suppress, an active LPF stage can be inserted between the MUX output and the ADC without changing the per-sensor buffer or MUX. The spare op-amp channel available in the seventh dual package is reserved for this purpose if needed.
 
 ### Buffer op-amp selection criteria
 
@@ -153,11 +167,11 @@ Note: the 7 dual op-amp packages must be placed close to their respective sensor
 |------|----------|-------|
 | MUX switch command (SPI/digital) | < 1 µs | Negligible |
 | MUX switching time (Ron settling) | < 1 µs | TMUX16116 ton ~200 ns |
-| Signal settling at ADC input | **5–10 µs** | Buffer Z_out (~100 Ω) × C_ADC+trace (~30 pF) → τ ≈ 3 ns; allow 10 µs margin for charge injection |
+| RC filter settling at ADC input | **~2 ms** | R_total (~1.2 kΩ) × C (100 nF) → τ ≈ 120 µs; 17τ for 24-bit accuracy ≈ 2 ms |
 | ADC conversion (ADS122C14, 90 SPS normal mode) | **11 ms** | Per single conversion |
 | ADC conversion (20 SPS, maximum noise rejection) | **50 ms** | Per single conversion |
 
-MUX switching overhead is negligible. ADC conversion dominates.
+The RC settling time (2 ms) is small but not negligible — it adds ~28 ms overhead across 14 channels per full scan. ADC conversion still dominates.
 
 ### Full scan time (no temperature modulation)
 
@@ -215,11 +229,12 @@ The chemical response time of resistive gas sensors (seconds to minutes for equi
 
 ## Summary of Trade-offs
 
-| | MUX-first (proposed) | **Hybrid (recommended)** | Fully distributed |
+| | MUX-first (proposed) | **Hybrid B (chosen)** | Fully distributed |
 |---|---|---|---|
-| BOM cost | Lowest (~$9.35) | **Middle (~$11.45)** | Highest (~$17.90) |
-| PCB area | Smallest (~75 mm²) | **Middle (~177 mm²)** | Largest (~288 mm²) |
+| BOM cost | Lowest (~$9.35) | **~$11.45** | Highest (~$17.90) |
+| PCB area | Smallest (~75 mm²) | **~177 mm²** | Largest (~288 mm²) |
 | ADC channels | 1 | **1** | 14 |
+| Active LPF per sensor | ❌ No | **❌ No (not needed)** | ✅ Yes (precautionary) |
 | Noise on long traces | ❌ ~100 mV at 100 kΩ source | **✅ ~0.2 mV at 100 Ω source** | ✅ No long high-Z traces |
 | MUX leakage error | ❌ Up to 15 mV at 100 kΩ | **✅ <15 µV at 100 Ω** | ✅ N/A |
 | Simultaneous readings | ❌ No | **❌ No** | ✅ Yes |

@@ -20,32 +20,32 @@ The array contains **14 sensors** across two heater voltage rails. Two sensors f
 
 ### Sensor inventory
 
-| Sensor | Manufacturer | Target gas | V_H | P_H (max) | Rail |
-|--------|-------------|-----------|-----|-----------|------|
-| GM-102B | Winsen | NO₂ | 1.8 V ±0.1 V | ≤ 40 mW | 1.8 V |
-| SMD1001 | IDM/Huiwen | Formaldehyde | 1.8 V ±0.05 V | ≤ 36 mW | 1.8 V |
-| SMD1002 | IDM/Huiwen | Ammonia (NH₃) | 1.8 V ±0.05 V | ≤ 36 mW | 1.8 V |
-| SMD1007 | IDM/Huiwen | Hydrogen sulfide (H₂S) | 1.8 V ±0.05 V | ≤ 36 mW | 1.8 V |
-| SMD1008 | IDM/Huiwen | Methane (CH₄) | 1.8 V ±0.05 V | ≤ 30 mW | 1.8 V |
-| SMD1011 | IDM/Huiwen | Propane (C₃H₈) | 1.8 V ±0.05 V | ≤ 30 mW | 1.8 V |
-| SMD1013B | IDM/Huiwen | TVOC | 1.8 V ±0.1 V | ≤ 43 mW | 1.8 V |
-| SMD1015 | IDM/Huiwen | Acetone | 1.8 V ±0.1 V | ≤ 30 mW | 1.8 V |
-| GM-602B | Winsen | H₂S & benzene | 1.9 V ±0.1 V | ≤ 40 mW | 1.8 V† |
-| GM-202B | Winsen | Smoke/alcohol | 2.5 V ±0.1 V | ≤ 50 mW | 2.5 V |
-| GM-302B | Winsen | Ethanol | 2.5 V ±0.1 V | ≤ 50 mW | 2.5 V |
-| GM-502B | Winsen | VOC | 2.5 V ±0.1 V | ≤ 50 mW | 2.5 V |
-| GM-512B | Winsen | H₂S/alcohol/acetone | 2.5 V ±0.1 V | ≤ 50 mW | 2.5 V |
-| GMV-2021B | Winsen | Hydrogen (H₂) | 2.5 V ±0.1 V | ≤ 50 mW | 2.5 V |
+| Sensor    | Manufacturer | Target gas             | V_H           | P_H (max) | Rail   |
+| --------- | ------------ | ---------------------- | ------------- | --------- | ------ |
+| GM-102B   | Winsen       | NO₂                    | 1.8 V ±0.1 V  | ≤ 40 mW   | 1.8 V  |
+| SMD1001   | IDM/Huiwen   | Formaldehyde           | 1.8 V ±0.05 V | ≤ 36 mW   | 1.8 V  |
+| SMD1002   | IDM/Huiwen   | Ammonia (NH₃)          | 1.8 V ±0.05 V | ≤ 36 mW   | 1.8 V  |
+| SMD1007   | IDM/Huiwen   | Hydrogen sulfide (H₂S) | 1.8 V ±0.05 V | ≤ 36 mW   | 1.8 V  |
+| SMD1008   | IDM/Huiwen   | Methane (CH₄)          | 1.8 V ±0.05 V | ≤ 30 mW   | 1.8 V  |
+| SMD1011   | IDM/Huiwen   | Propane (C₃H₈)         | 1.8 V ±0.05 V | ≤ 30 mW   | 1.8 V  |
+| SMD1013B  | IDM/Huiwen   | TVOC                   | 1.8 V ±0.1 V  | ≤ 43 mW   | 1.8 V  |
+| SMD1015   | IDM/Huiwen   | Acetone                | 1.8 V ±0.1 V  | ≤ 30 mW   | 1.8 V  |
+| GM-602B   | Winsen       | H₂S & benzene          | 1.9 V ±0.1 V  | ≤ 40 mW   | 1.8 V† |
+| GM-202B   | Winsen       | Smoke/alcohol          | 2.5 V ±0.1 V  | ≤ 50 mW   | 2.5 V  |
+| GM-302B   | Winsen       | Ethanol                | 2.5 V ±0.1 V  | ≤ 50 mW   | 2.5 V  |
+| GM-502B   | Winsen       | VOC                    | 2.5 V ±0.1 V  | ≤ 50 mW   | 2.5 V  |
+| GM-512B   | Winsen       | H₂S/alcohol/acetone    | 2.5 V ±0.1 V  | ≤ 50 mW   | 2.5 V  |
+| GMV-2021B | Winsen       | Hydrogen (H₂)          | 2.5 V ±0.1 V  | ≤ 50 mW   | 2.5 V  |
 
 **†** GM-602B is rated 1.9 V ±0.1 V; its operating range is 1.8–2.0 V. Running at 1.8 V is at the lower tolerance bound and delivers ~90% of nominal heater power — conservative and within spec. Sensitivity curves are characterised at 1.9 V; response will differ marginally at 1.8 V but the sensor is not damaged.
 
 ### Per-rail power summary
 
-| Rail | Sensors | Peak current (all on) | Max heater power |
-|------|---------|----------------------|-----------------|
-| 1.8 V | 9 | ~179 mA | ≤ 321 mW |
-| 2.5 V | 5 | ~100 mA | ≤ 250 mW |
-| **Total** | **14** | | **≤ 571 mW** |
+| Rail      | Sensors | Peak current (all on) | Max heater power |
+| --------- | ------- | --------------------- | ---------------- |
+| 1.8 V     | 9       | ~179 mA               | ≤ 321 mW         |
+| 2.5 V     | 5       | ~100 mA               | ≤ 250 mW         |
+| **Total** | **14**  |                       | **≤ 571 mW**     |
 
 Datasheets for all proposed sensors are in `hardware/sensors/`.
 
@@ -81,10 +81,10 @@ Shared rails mean residual switching noise is common-mode within each group, mak
 
 ### Buck converter parameters
 
-| Rail | Peak load | Recommended converter rating | Inductor (from 3.7 V, 1 MHz) | Notes |
-|------|-----------|------------------------------|------------------------------|-------|
-| 1.8 V | ~179 mA | 350–500 mA output | 15–22 µH | Target 1.85 V output to compensate post-filter DCR drop |
-| 2.5 V | ~100 mA | 200–300 mA output | 22–33 µH | |
+| Rail  | Peak load | Recommended converter rating | Inductor (from 3.7 V, 1 MHz) | Notes                                                   |
+| ----- | --------- | ---------------------------- | ---------------------------- | ------------------------------------------------------- |
+| 1.8 V | ~179 mA   | 350–500 mA output            | 15–22 µH                     | Target 1.85 V output to compensate post-filter DCR drop |
+| 2.5 V | ~100 mA   | 200–300 mA output            | 22–33 µH                     |                                                         |
 
 Both converters require: input voltage range 3.0–5.5 V; switching frequency 400 kHz–2 MHz; MCU-controlled enable pin; fixed output voltage preferred.
 
@@ -127,27 +127,30 @@ PWM frequency should exceed 10 kHz to minimise temperature ripple relative to th
 
 ## Signal Readout Architecture
 
-**Decision:** Hybrid buffer-first MUX architecture. Full rationale in [mux_architecture.md](mux_architecture.md).
+**Decision:** Hybrid B — buffer-first MUX with passive RC anti-aliasing, no active LPF. Full rationale in [sensor_output_architecture.md](sensor_output_architecture.md).
 
-A 16:1 analog MUX centralises readout to a single ADC channel. To avoid noise pickup and MUX leakage errors on high-impedance sensor output traces, a unity-gain buffer is placed close to each sensor (~2–5 mm trace) before the MUX:
+A 16:1 analog MUX centralises readout to a single ADC channel. A unity-gain buffer close to each sensor converts its high-impedance output to ~100 Ω before the signal travels to the MUX:
 
 ```
 Each sensor → unity buffer (RRIO CMOS, <10 pA Ib, SOT-23-8 dual)
-           → [low-Z routed trace] → 16:1 MUX → gain stage → ADC
+           → [low-Z routed trace] → 16:1 MUX → passive RC (1 kΩ + 100 nF) → ADC
 ```
 
-This replaces the original 28-op-amp fully-distributed design with 14 buffers + 1 MUX + 1 gain stage, saving ~$6.45/board and ~111 mm² of PCB area.
+No active LPF is needed: the ADS122C14's delta-sigma filter provides >100 dB rejection of heater PWM frequencies at 20 SPS, and the heater supply LC post-filter already suppresses V_H ripple to sub-millivolt levels. The passive RC acts only as an anti-aliasing filter (f_c ≈ 1.3 kHz) to protect the ADC during MUX switching.
+
+This replaces the original 28-op-amp fully-distributed design with 14 buffers + 1 MUX + passive RC, saving ~$6.45/board and ~111 mm² of PCB area. The seventh dual op-amp package has a spare channel reserved for an active LPF if prototyping shows it is needed.
 
 The MUX-first variant (no per-sensor buffers) was evaluated and rejected: sensor source impedance of up to 100 kΩ in combination with the board's switching noise environment would produce ~100–200 mV of coupled noise on sensor traces, negating the 24-bit ADC resolution entirely.
 
 ### Key parameters
 
-| Parameter | Value |
-|---|---|
-| Buffer op-amp | RRIO CMOS dual, Ib < 10 pA, Vos < 1 mV (e.g. OPA2334, TLV2372) |
-| MUX | 16:1 analog, Ron < 200 Ω, leakage < 15 nA (e.g. TMUX16116, ADG1607) |
-| ADC channels required | 1 (vs. 14 in fully-distributed design) |
-| Full scan time (4 temperature steps, Strategy B) | ~2.8 s at 90 SPS / 4 averages |
+| Parameter                                        | Value                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------------- |
+| Buffer op-amp                                    | RRIO CMOS dual, Ib < 10 pA, Vos < 1 mV (e.g. OPA2334, TLV2372)      |
+| MUX                                              | 16:1 analog, Ron < 200 Ω, leakage < 15 nA (e.g. TMUX16116, ADG1607) |
+| Anti-aliasing filter                             | 1 kΩ + 100 nF passive RC, f_c ≈ 1.3 kHz, ~2 ms settling             |
+| ADC channels required                            | 1 (vs. 14 in fully-distributed design)                              |
+| Full scan time (4 temperature steps, Strategy B) | ~2.8 s at 90 SPS / 4 averages                                       |
 
 ## ADC
 
@@ -167,7 +170,7 @@ External PWM ICs were evaluated and all rejected: constant-current LED drivers (
 
 Because the original ESP32 lacks native USB, a **CP2102N** USB-to-UART bridge is included on the PCB for programming and debug. BRIAN's primary data paths (BLE for the mobile app, WiFi for the web interface) are unaffected.
 
-Full decision rationale, ESP32 family comparison, rejected alternatives, and Arduino LEDC implementation notes: [mcu_pwm_decision.md](mcu_pwm_decision.md)
+Full decision rationale, ESP32 family comparison, rejected alternatives, and Arduino LEDC implementation notes: [pwm_driver.md](pwm_driver.md)
 
 ---
 
@@ -177,4 +180,4 @@ Full decision rationale, ESP32 family comparison, rejected alternatives, and Ard
 - https://pubmed.ncbi.nlm.nih.gov/30857123/
 - https://share.google/srmmD0KdJVKQ4o7NJ
 - Detailed heater power design rationale: [heater_power.md](heater_power.md)
-- MCU and PWM controller selection: [mcu_pwm_decision.md](mcu_pwm_decision.md)
+- MCU and PWM controller selection: [pwm_driver.md](pwm_driver.md)
