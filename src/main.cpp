@@ -1,12 +1,14 @@
 /*
     Video: https://www.youtube.com/watch?v=oCMOYS71NIU
-    Based on Neil Kolban example for IDF: https://github.com/nkolban/esp32-snippets/blob/master/cpp_utils/tests/BLE%20Tests/SampleNotify.cpp
+    Based on Neil Kolban example for IDF:
+   https://github.com/nkolban/esp32-snippets/blob/master/cpp_utils/tests/BLE%20Tests/SampleNotify.cpp
     Ported to Arduino ESP32 by Evandro Copercini
     updated by chegewara
 
-   Create a BLE server that, once we receive a connection, will send periodic notifications.
-   The service advertises itself as: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
-   And has a characteristic of: beb5483e-36e1-4688-b7f5-ea07361b26a8
+   Create a BLE server that, once we receive a connection, will send periodic
+   notifications. The service advertises itself as:
+   4fafc201-1fb5-459e-8fcc-c5c9c331914b And has a characteristic of:
+   beb5483e-36e1-4688-b7f5-ea07361b26a8
 
    The design of creating the BLE server is:
    1. Create a BLE Server
@@ -16,22 +18,22 @@
    5. Start the service.
    6. Start advertising.
 
-   A connect handler associated with the server starts a background task that performs notification
-   every couple of seconds.
+   A connect handler associated with the server starts a background task that
+   performs notification every couple of seconds.
 */
 #include <Arduino.h>
+#include <BLE2902.h>
 #include <BLEDevice.h>
+#include <BLESecurity.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
-#include <BLE2902.h>
-#include <BLESecurity.h>
 // #include <BLE2901.h>
 
-#include <SPI.h>
-#include <SD.h>
-#include <Wire.h>
 #include <Adafruit_ADS1X15.h>
 #include <Adafruit_BME680.h>
+#include <SD.h>
+#include <SPI.h>
+#include <Wire.h>
 #include <sys/time.h>
 
 BLEServer *pServer = NULL;
@@ -43,10 +45,14 @@ bool oldDeviceConnected = false;
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
 
-// Here we are creating a service for the Environmental Sensing Service (ESS) – standardized ESS UUID: https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf
+// Here we are creating a service for the Environmental Sensing Service (ESS) –
+// standardized ESS UUID:
+// https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf
 #define SERVICE_UUID (BLEUUID((uint16_t)0x181A))
-// Here we are creating a custom service for sensors that do not have a standardised service
-#define CUSTOM_SERVICE_UUID "de664a17-7db4-449f-97ba-5514e19a9d94" // custom service
+// Here we are creating a custom service for sensors that do not have a
+// standardised service
+#define CUSTOM_SERVICE_UUID                                                    \
+  "de664a17-7db4-449f-97ba-5514e19a9d94" // custom service
 
 // create characteristics for each gas sensor
 // Board 1 (ADS1) sensors
@@ -77,8 +83,7 @@ BLECharacteristic *altitudeCharacteristic = NULL;
 BLECharacteristic *timeSyncCharacteristic = NULL;
 
 // Board structure to hold information about each ADS1015 board
-struct Board
-{
+struct Board {
   Adafruit_ADS1015 ads;
   uint8_t i2c_address;
   bool present;
@@ -89,17 +94,22 @@ constexpr uint8_t boardAds1 = 0;
 constexpr uint8_t boardAds2 = 1;
 constexpr uint8_t boardAds3 = 2;
 
+// ADS1015 gain settings per sensor.
+// TODO: expose these as configurable settings from the web interface.
+constexpr adsGain_t GAIN_BOARD1_DEFAULT = GAIN_ONE; // CH4, HCHO, Odor
+constexpr adsGain_t GAIN_VOC = GAIN_FOUR;           // VOC (board 1, channel 2)
+constexpr adsGain_t GAIN_BOARD2_DEFAULT = GAIN_ONE; // EtOH, H2S, NO2
+constexpr adsGain_t GAIN_NH3 = GAIN_SIXTEEN;        // NH3 (board 2, channel 3)
+constexpr adsGain_t GAIN_BOARD3_DEFAULT = GAIN_ONE; // CO, Smoke, H2
+
 // Array of boards
-Board boards[boardCount] = {
-    {Adafruit_ADS1015(), 0x48, false},
-    {Adafruit_ADS1015(), 0x49, false},
-    {Adafruit_ADS1015(), 0x4A, false}};
+Board boards[boardCount] = {{Adafruit_ADS1015(), 0x48, false},
+                            {Adafruit_ADS1015(), 0x49, false},
+                            {Adafruit_ADS1015(), 0x4A, false}};
 
 // Function to get a board by number
-Board *getBoard(uint8_t board_num)
-{
-  if (board_num < boardCount)
-  {
+Board *getBoard(uint8_t board_num) {
+  if (board_num < boardCount) {
     return &boards[board_num];
   }
   return NULL;
@@ -110,8 +120,7 @@ Adafruit_BME680 bme680;
 bool bme680_present = false;
 
 // Initialize BME680 sensor and detect if present
-void initBME680()
-{
+void initBME680() {
   if (!bme680.begin(0x77)) // Default I2C address
   {
     if (!bme680.begin(0x76)) // Alternative I2C address
@@ -132,19 +141,15 @@ void initBME680()
   bme680.setGasHeater(320, 150); // 320°C for 150 ms
 }
 
-// Here is a function to initialize the MEMS sensor and detect which boards are present
-void initMEMS()
-{
-  for (size_t i = 0; i < boardCount; i++)
-  {
-    if (boards[i].ads.begin(boards[i].i2c_address))
-    {
+// Here is a function to initialize the MEMS sensor and detect which boards are
+// present
+void initMEMS() {
+  for (size_t i = 0; i < boardCount; i++) {
+    if (boards[i].ads.begin(boards[i].i2c_address)) {
       boards[i].present = true;
       Serial.print("Found ADS1015 at 0x");
       Serial.println(boards[i].i2c_address, HEX);
-    }
-    else
-    {
+    } else {
       Serial.print("ADS1015 not found at 0x");
       Serial.println(boards[i].i2c_address, HEX);
     }
@@ -152,24 +157,20 @@ void initMEMS()
 
   // Check if at least one board is present
   bool any_present = false;
-  for (size_t i = 0; i < boardCount; i++)
-  {
-    if (boards[i].present)
-    {
+  for (size_t i = 0; i < boardCount; i++) {
+    if (boards[i].present) {
       any_present = true;
       break;
     }
   }
 
-  if (!any_present)
-  {
+  if (!any_present) {
     Serial.println("ERROR: No ADS1015 boards found!");
   }
 }
 
 // Helper function to add BLE2902 descriptor for notifications
-void setupCCCDDescriptor(BLECharacteristic *characteristic)
-{
+void setupCCCDDescriptor(BLECharacteristic *characteristic) {
   // Add the Client Characteristic Configuration Descriptor (CCCD)
   BLE2902 *descriptor = new BLE2902();
   // Set read and write permissions on the descriptor to allow CCCD negotiation
@@ -178,10 +179,8 @@ void setupCCCDDescriptor(BLECharacteristic *characteristic)
 }
 
 // Callback class for handling time synchronization writes
-class TimeSyncCallbacks : public BLECharacteristicCallbacks
-{
-  void onWrite(BLECharacteristic *pCharacteristic)
-  {
+class TimeSyncCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) {
     uint8_t *data = pCharacteristic->getData();
     size_t length = pCharacteristic->getLength();
 
@@ -209,8 +208,7 @@ class TimeSyncCallbacks : public BLECharacteristicCallbacks
       strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
       Serial.print("Local time: ");
       Serial.println(strftime_buf);
-    }
-    else if (length == 4) // Alternative: 4 bytes for uint32_t
+    } else if (length == 4) // Alternative: 4 bytes for uint32_t
     {
       uint32_t timestamp;
       memcpy(&timestamp, data, 4);
@@ -222,29 +220,19 @@ class TimeSyncCallbacks : public BLECharacteristicCallbacks
 
       Serial.print("RTC synchronized to: ");
       Serial.println(timestamp);
-    }
-    else
-    {
+    } else {
       Serial.println("Invalid time sync data length");
     }
   }
 };
 
-class MyServerCallbacks : public BLEServerCallbacks
-{
-  void onConnect(BLEServer *pServer)
-  {
-    deviceConnected = true;
-  };
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *pServer) { deviceConnected = true; };
 
-  void onDisconnect(BLEServer *pServer)
-  {
-    deviceConnected = false;
-  }
+  void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
 };
 
-void setup()
-{
+void setup() {
   Serial.begin(115200);
 
   // The ADS1115/BME680 probes need the I2C bus to be initialized first.
@@ -255,7 +243,8 @@ void setup()
   initBME680();
   // Create the BLE Device
   BLEDevice::init("BRIAN");
-  // this is for increasing the MTU size - default is 23 bytes, we can set it up to 517 bytes
+  // this is for increasing the MTU size - default is 23 bytes, we can set it up
+  // to 517 bytes
   BLEDevice::setMTU(517);
 
   // Require an encrypted (bonded) link before allowing time sync writes.
@@ -273,13 +262,14 @@ void setup()
   // Default is 15 handles, which is too small for this profile and can cause
   // later characteristics to miss descriptors (e.g. missing CCCD).
   BLEService *essService = pServer->createService(SERVICE_UUID, 40);
-  BLEService *customService = pServer->createService(BLEUUID(CUSTOM_SERVICE_UUID), 50);
+  BLEService *customService =
+      pServer->createService(BLEUUID(CUSTOM_SERVICE_UUID), 50);
   // Create characteristics
 
   // these are for ESS standardised characteristics
-  // Taken partially from https://www.bluetooth.com/specifications/assigned-numbers/
-  if (getBoard(boardAds1)->present)
-  {
+  // Taken partially from
+  // https://www.bluetooth.com/specifications/assigned-numbers/
+  if (getBoard(boardAds1)->present) {
     ch4Characteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2BD1),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
@@ -290,7 +280,8 @@ void setup()
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     setupCCCDDescriptor(vocCharacteristic);
 
-    // these are for custom characteristics, generated at https://www.uuidgenerator.net/guid (ADS1 sensors)
+    // these are for custom characteristics, generated at
+    // https://www.uuidgenerator.net/guid (ADS1 sensors)
     hchoCharacteristic = customService->createCharacteristic(
         BLEUUID("6a135b89-f360-4f64-86fc-5a14092034b4"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
@@ -302,8 +293,7 @@ void setup()
     setupCCCDDescriptor(odorCharacteristic);
   }
 
-  if (getBoard(boardAds2)->present)
-  {
+  if (getBoard(boardAds2)->present) {
 
     nh3Characteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2BCF),
@@ -329,8 +319,7 @@ void setup()
   Serial.print("BoardAds3 (0x4A) present flag: ");
   Serial.println(getBoard(boardAds3)->present ? "TRUE" : "FALSE");
 
-  if (getBoard(boardAds3)->present)
-  {
+  if (getBoard(boardAds3)->present) {
     Serial.println("Creating CO, Smoke, H2 characteristics...");
     coCharacteristic = customService->createCharacteristic(
         BLEUUID("88f6fa6c-c4e0-4a3d-ba72-f435641251c4"),
@@ -349,15 +338,13 @@ void setup()
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     setupCCCDDescriptor(h2Characteristic);
     Serial.println("  Created H2 characteristic");
-  }
-  else
-  {
-    Serial.println("BoardAds3 NOT present - skipping CO, Smoke, H2 characteristics");
+  } else {
+    Serial.println(
+        "BoardAds3 NOT present - skipping CO, Smoke, H2 characteristics");
   }
 
   // Create characteristics for BME680 environmental sensor if present
-  if (bme680_present)
-  {
+  if (bme680_present) {
     // Temperature (ESS standard UUID 0x2A6E)
     temperatureCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2A6E),
@@ -412,27 +399,24 @@ void setup()
   pAdvertising->addServiceUUID(CUSTOM_SERVICE_UUID);
 
   pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x0); // set value to 0x00 to not advertise this parameter
+  pAdvertising->setMinPreferred(
+      0x0); // set value to 0x00 to not advertise this parameter
   BLEDevice::startAdvertising();
   Serial.println("Waiting a client connection to notify...");
 }
 
-void loop()
-{
-  if (deviceConnected)
-  {
+void loop() {
+  if (deviceConnected) {
     // Read from board 0 (ADS1) sensors if present
-    if (getBoard(boardAds1)->present)
-    {
+    if (getBoard(boardAds1)->present) {
       Board *board = getBoard(boardAds1);
-      board->ads.setGain(GAIN_ONE);
+      board->ads.setGain(GAIN_BOARD1_DEFAULT);
       // Read raw ADC value for formaldehyde
       int16_t hchoRaw = board->ads.readADC_SingleEnded(0);
       // Converting to voltage using the function from the library
       float hchoVolt = board->ads.computeVolts(hchoRaw);
       // Here we are sending the voltage value as float
-      if (hchoCharacteristic != NULL)
-      {
+      if (hchoCharacteristic != NULL) {
         hchoCharacteristic->setValue((uint8_t *)&hchoVolt, sizeof(hchoVolt));
         // Send float value directly over BLE (4 bytes)
         hchoCharacteristic->notify();
@@ -441,19 +425,17 @@ void loop()
       // CH4 sensor
       int16_t ch4Raw = board->ads.readADC_SingleEnded(1);
       float ch4Volt = board->ads.computeVolts(ch4Raw);
-      if (ch4Characteristic != NULL)
-      {
+      if (ch4Characteristic != NULL) {
         ch4Characteristic->setValue((uint8_t *)&ch4Volt, sizeof(ch4Volt));
         ch4Characteristic->notify();
       }
 
       // VOC sensor
-      board->ads.setGain(GAIN_FOUR);
+      board->ads.setGain(GAIN_VOC);
       int16_t vocRaw = board->ads.readADC_SingleEnded(2);
-      board->ads.setGain(GAIN_ONE);
+      board->ads.setGain(GAIN_BOARD1_DEFAULT);
       float vocVolt = board->ads.computeVolts(vocRaw);
-      if (vocCharacteristic != NULL)
-      {
+      if (vocCharacteristic != NULL) {
         vocCharacteristic->setValue((uint8_t *)&vocVolt, sizeof(vocVolt));
         vocCharacteristic->notify();
       }
@@ -461,23 +443,20 @@ void loop()
       // Odor sensor
       int16_t odorRaw = board->ads.readADC_SingleEnded(3);
       float odorVolt = board->ads.computeVolts(odorRaw);
-      if (odorCharacteristic != NULL)
-      {
+      if (odorCharacteristic != NULL) {
         odorCharacteristic->setValue((uint8_t *)&odorVolt, sizeof(odorVolt));
         odorCharacteristic->notify();
       }
     }
 
     // Read from board 1 (ADS2) sensors if present
-    if (getBoard(boardAds2)->present)
-    {
+    if (getBoard(boardAds2)->present) {
       Board *board = getBoard(boardAds2);
-      board->ads.setGain(GAIN_ONE);
+      board->ads.setGain(GAIN_BOARD2_DEFAULT);
       // Ethanol sensor
       int16_t etohRaw = board->ads.readADC_SingleEnded(0);
       float etohVolt = board->ads.computeVolts(etohRaw);
-      if (etohCharacteristic != NULL)
-      {
+      if (etohCharacteristic != NULL) {
         etohCharacteristic->setValue((uint8_t *)&etohVolt, sizeof(etohVolt));
         etohCharacteristic->notify();
       }
@@ -485,8 +464,7 @@ void loop()
       // H2S sensor
       int16_t h2sRaw = board->ads.readADC_SingleEnded(1);
       float h2sVolt = board->ads.computeVolts(h2sRaw);
-      if (h2sCharacteristic != NULL)
-      {
+      if (h2sCharacteristic != NULL) {
         h2sCharacteristic->setValue((uint8_t *)&h2sVolt, sizeof(h2sVolt));
         h2sCharacteristic->notify();
       }
@@ -494,34 +472,30 @@ void loop()
       // NO2 sensor
       int16_t no2Raw = board->ads.readADC_SingleEnded(2);
       float no2Volt = board->ads.computeVolts(no2Raw);
-      if (no2Characteristic != NULL)
-      {
+      if (no2Characteristic != NULL) {
         no2Characteristic->setValue((uint8_t *)&no2Volt, sizeof(no2Volt));
         no2Characteristic->notify();
       }
 
       // NH3 sensor
-      board->ads.setGain(GAIN_SIXTEEN);
+      board->ads.setGain(GAIN_NH3);
       int16_t nh3Raw = board->ads.readADC_SingleEnded(3);
-      board->ads.setGain(GAIN_ONE);
+      board->ads.setGain(GAIN_BOARD2_DEFAULT);
       float nh3Volt = board->ads.computeVolts(nh3Raw);
-      if (nh3Characteristic != NULL)
-      {
+      if (nh3Characteristic != NULL) {
         nh3Characteristic->setValue((uint8_t *)&nh3Volt, sizeof(nh3Volt));
         nh3Characteristic->notify();
       }
     }
 
     // Read from board 2 (ADS3) sensors if present
-    if (getBoard(boardAds3)->present)
-    {
+    if (getBoard(boardAds3)->present) {
       Board *board = getBoard(boardAds3);
-      board->ads.setGain(GAIN_ONE);
+      board->ads.setGain(GAIN_BOARD3_DEFAULT);
       // CO sensor
       int16_t coRaw = board->ads.readADC_SingleEnded(0);
       float coVolt = board->ads.computeVolts(coRaw);
-      if (coCharacteristic != NULL)
-      {
+      if (coCharacteristic != NULL) {
         coCharacteristic->setValue((uint8_t *)&coVolt, sizeof(coVolt));
         coCharacteristic->notify();
       }
@@ -529,8 +503,7 @@ void loop()
       // Smoke sensor
       int16_t smokeRaw = board->ads.readADC_SingleEnded(1);
       float smokeVolt = board->ads.computeVolts(smokeRaw);
-      if (smokeCharacteristic != NULL)
-      {
+      if (smokeCharacteristic != NULL) {
         smokeCharacteristic->setValue((uint8_t *)&smokeVolt, sizeof(smokeVolt));
         smokeCharacteristic->notify();
       }
@@ -538,8 +511,7 @@ void loop()
       // H2 sensor
       int16_t h2Raw = board->ads.readADC_SingleEnded(2);
       float h2Volt = board->ads.computeVolts(h2Raw);
-      if (h2Characteristic != NULL)
-      {
+      if (h2Characteristic != NULL) {
         h2Characteristic->setValue((uint8_t *)&h2Volt, sizeof(h2Volt));
         h2Characteristic->notify();
       }
@@ -553,47 +525,45 @@ void loop()
     }
 
     // Read from BME680 sensor if present
-    if (bme680_present)
-    {
-      if (bme680.performReading())
-      {
+    if (bme680_present) {
+      if (bme680.performReading()) {
         // Read temperature
         float temperature = bme680.temperature;
-        if (temperatureCharacteristic != NULL)
-        {
-          temperatureCharacteristic->setValue((uint8_t *)&temperature, sizeof(temperature));
+        if (temperatureCharacteristic != NULL) {
+          temperatureCharacteristic->setValue((uint8_t *)&temperature,
+                                              sizeof(temperature));
           temperatureCharacteristic->notify();
         }
 
         // Read pressure (convert from Pa to hPa for BLE)
         float pressure = bme680.pressure / 100.0;
-        if (pressureCharacteristic != NULL)
-        {
-          pressureCharacteristic->setValue((uint8_t *)&pressure, sizeof(pressure));
+        if (pressureCharacteristic != NULL) {
+          pressureCharacteristic->setValue((uint8_t *)&pressure,
+                                           sizeof(pressure));
           pressureCharacteristic->notify();
         }
 
         // Read humidity
         float humidity = bme680.humidity;
-        if (humidityCharacteristic != NULL)
-        {
-          humidityCharacteristic->setValue((uint8_t *)&humidity, sizeof(humidity));
+        if (humidityCharacteristic != NULL) {
+          humidityCharacteristic->setValue((uint8_t *)&humidity,
+                                           sizeof(humidity));
           humidityCharacteristic->notify();
         }
 
         // Read gas resistance
         float gas = bme680.gas_resistance;
-        if (gasCharacteristic != NULL)
-        {
+        if (gasCharacteristic != NULL) {
           gasCharacteristic->setValue((uint8_t *)&gas, sizeof(gas));
           gasCharacteristic->notify();
         }
 
-        // Calculate and read altitude (assuming sea level pressure of 1013.25 hPa)
+        // Calculate and read altitude (assuming sea level pressure of 1013.25
+        // hPa)
         float altitude = bme680.readAltitude(1013.25);
-        if (altitudeCharacteristic != NULL)
-        {
-          altitudeCharacteristic->setValue((uint8_t *)&altitude, sizeof(altitude));
+        if (altitudeCharacteristic != NULL) {
+          altitudeCharacteristic->setValue((uint8_t *)&altitude,
+                                           sizeof(altitude));
           altitudeCharacteristic->notify();
         }
 
@@ -609,9 +579,7 @@ void loop()
         Serial.print(" Ohms, Altitude:");
         Serial.print(altitude);
         Serial.println(" m");
-      }
-      else
-      {
+      } else {
         Serial.println("BME680 reading failed");
       }
     }
@@ -620,16 +588,14 @@ void loop()
     delay(5000);
   }
   // disconnecting
-  if (!deviceConnected && oldDeviceConnected)
-  {
-    delay(500);                  // give the bluetooth stack the chance to get things ready
+  if (!deviceConnected && oldDeviceConnected) {
+    delay(500); // give the bluetooth stack the chance to get things ready
     pServer->startAdvertising(); // restart advertising
     Serial.println("start advertising");
     oldDeviceConnected = deviceConnected;
   }
   // connecting
-  if (deviceConnected && !oldDeviceConnected)
-  {
+  if (deviceConnected && !oldDeviceConnected) {
     // do stuff here on connecting
     oldDeviceConnected = deviceConnected;
   }
