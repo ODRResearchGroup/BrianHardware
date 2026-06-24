@@ -247,6 +247,10 @@ void setup()
 {
   Serial.begin(115200);
 
+  // The ADS1115/BME680 probes need the I2C bus to be initialized first.
+  Wire.begin();
+  Wire.setClock(400000);
+
   initMEMS();
   initBME680();
   // Create the BLE Device
@@ -322,22 +326,33 @@ void setup()
     setupCCCDDescriptor(h2sCharacteristic);
   }
 
+  Serial.print("BoardAds3 (0x4A) present flag: ");
+  Serial.println(getBoard(boardAds3)->present ? "TRUE" : "FALSE");
+
   if (getBoard(boardAds3)->present)
   {
+    Serial.println("Creating CO, Smoke, H2 characteristics...");
     coCharacteristic = customService->createCharacteristic(
         BLEUUID("88f6fa6c-c4e0-4a3d-ba72-f435641251c4"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     setupCCCDDescriptor(coCharacteristic);
+    Serial.println("  Created CO characteristic");
 
     smokeCharacteristic = customService->createCharacteristic(
         BLEUUID("cafb955e-6e7b-424b-9e03-6d8d003aa286"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     setupCCCDDescriptor(smokeCharacteristic);
+    Serial.println("  Created Smoke characteristic");
 
     h2Characteristic = customService->createCharacteristic(
         BLEUUID("0176655b-0007-4e02-abc1-e9f2d6815f46"),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     setupCCCDDescriptor(h2Characteristic);
+    Serial.println("  Created H2 characteristic");
+  }
+  else
+  {
+    Serial.println("BoardAds3 NOT present - skipping CO, Smoke, H2 characteristics");
   }
 
   // Create characteristics for BME680 environmental sensor if present
@@ -410,6 +425,7 @@ void loop()
     if (getBoard(boardAds1)->present)
     {
       Board *board = getBoard(boardAds1);
+      board->ads.setGain(GAIN_ONE);
       // Read raw ADC value for formaldehyde
       int16_t hchoRaw = board->ads.readADC_SingleEnded(0);
       // Converting to voltage using the function from the library
@@ -432,7 +448,9 @@ void loop()
       }
 
       // VOC sensor
+      board->ads.setGain(GAIN_FOUR);
       int16_t vocRaw = board->ads.readADC_SingleEnded(2);
+      board->ads.setGain(GAIN_ONE);
       float vocVolt = board->ads.computeVolts(vocRaw);
       if (vocCharacteristic != NULL)
       {
@@ -454,6 +472,7 @@ void loop()
     if (getBoard(boardAds2)->present)
     {
       Board *board = getBoard(boardAds2);
+      board->ads.setGain(GAIN_ONE);
       // Ethanol sensor
       int16_t etohRaw = board->ads.readADC_SingleEnded(0);
       float etohVolt = board->ads.computeVolts(etohRaw);
@@ -482,7 +501,9 @@ void loop()
       }
 
       // NH3 sensor
+      board->ads.setGain(GAIN_SIXTEEN);
       int16_t nh3Raw = board->ads.readADC_SingleEnded(3);
+      board->ads.setGain(GAIN_ONE);
       float nh3Volt = board->ads.computeVolts(nh3Raw);
       if (nh3Characteristic != NULL)
       {
@@ -495,6 +516,7 @@ void loop()
     if (getBoard(boardAds3)->present)
     {
       Board *board = getBoard(boardAds3);
+      board->ads.setGain(GAIN_ONE);
       // CO sensor
       int16_t coRaw = board->ads.readADC_SingleEnded(0);
       float coVolt = board->ads.computeVolts(coRaw);
