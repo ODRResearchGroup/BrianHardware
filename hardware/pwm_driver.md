@@ -33,6 +33,12 @@
   - `Common System GND` ───► `RP2040 GND`
 - **Design Restriction:** Do not allocate ESP32 input-only pins (GPIOs 34–39) for driving the programming lines.
 
+### Connections
+- 2x USB-C connectors, one for the ESP32, one for the RP2040
+- 2x communication methods between ESP32 and RP2040:
+  - Serial with RTX
+  - SPI (prefer HW SPI)
+
 ## 4. Low-Side Driver Specifications
 
 - **Primary Topology:** Low-Side Switching (Safe for purely resistive heating elements; avoids ground-lifting risks inherent to IMUs/data-carrying sensors).
