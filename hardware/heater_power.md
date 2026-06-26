@@ -125,22 +125,24 @@ The practical implementation is one buck converter per voltage rail, not one per
 
 ```
 Input rail (e.g. 3.7 V LiPo or 5 V USB)
-    ├── Buck A → 1.8 V ──→ [MOSFET_1]  → GM-102B
-    │                      [MOSFET_2]  → SMD1001
-    │                      [MOSFET_3]  → SMD1002
-    │                      [MOSFET_4]  → SMD1007
-    │                      [MOSFET_5]  → SMD1008
-    │                      [MOSFET_6]  → SMD1011
-    │                      [MOSFET_7]  → SMD1013B
-    │                      [MOSFET_8]  → SMD1015
-    │                      [MOSFET_9]  → GM-602B  (1.9 V ±0.1 V; at lower tolerance limit)
+    ├── Buck A → 1.8 V ──→ [CH_1]  → GM-102B heater
+    │                      [CH_2]  → SMD1001 heater
+    │                      [CH_3]  → SMD1002 heater
+    │                      [CH_4]  → SMD1007 heater
+    │                      [CH_5]  → SMD1008 heater
+    │                      [CH_6]  → SMD1011 heater
+    │                      [CH_7]  → SMD1013B heater
+    │                      [CH_8]  → SMD1015 heater
+    │                      [CH_9]  → GM-602B heater  (1.9 V ±0.1 V; at lower tolerance limit)
     │
-    └── Buck B → 2.5 V ──→ [MOSFET_10] → GM-202B
-                           [MOSFET_11] → GM-302B
-                           [MOSFET_12] → GM-502B
-                           [MOSFET_13] → GM-512B
-                           [MOSFET_14] → GMV-2021B
+    └── Buck B → 2.5 V ──→ [CH_10] → GM-202B heater
+                           [CH_11] → GM-302B heater
+                           [CH_12] → GM-502B heater
+                           [CH_13] → GM-512B heater
+                           [CH_14] → GMV-2021B heater
 ```
+
+Each `[CH_N]` is a low-side switch channel. For the driver IC and PWM co-processor implementation, see [pwm_driver.md](pwm_driver.md).
 
 This results in two power conversion stages and two inductors.
 
@@ -150,24 +152,17 @@ Residual switching ripple from a shared buck rail appears identically on all sen
 
 ---
 
-## Per-Sensor MOSFET Control
+## Per-Sensor Heater Switching and PWM Control
 
 Temperature modulation — cycling each heater through a sequence of set-point temperatures during a single measurement — is a standard technique for improving selectivity in resistive gas sensor arrays. Different gas species produce distinct resistance-vs-temperature profiles, allowing a single sensor to contribute more discriminating information per measurement cycle.
 
-This requires individual switching of each heater, implemented with an N-channel MOSFET per sensor placed between the shared voltage rail and the sensor heater pins.
-
-### MOSFET selection criteria
-
-- **V_DS rating**: ≥ 2× the rail voltage for margin (≥ 5 V for the 2.5 V rail; ≥ 3.6 V for the 1.8 V rail — a single part rated ≥ 6 V is appropriate across both rails).
-- **R_DS(on)**: Low enough that voltage drop does not significantly shift V_H. At 100 mA maximum per sensor, an R_DS(on) of 0.5 Ω introduces only 50 mV drop — acceptable given the ±0.1 V tolerance on V_H for most sensors. For the SMD series sensors with ±0.05 V tolerance, use R_DS(on) ≤ 0.2 Ω.
-- **Gate threshold (V_GS(th))**: Compatible with 3.3 V MCU logic. Logic-level MOSFETs with V_GS(th) of 1–2 V are suitable.
-- **Package**: SOT-23 or similar small-footprint SMD package is appropriate given the current levels.
+This requires individual switching of each heater. The driver implementation — including the choice of low-side driver IC and PWM co-processor — is specified in [pwm_driver.md](pwm_driver.md). In summary: each sensor heater is switched via a dedicated channel of a **Toshiba TBD62083APG** 8-channel DMOS FET array, driven by a **Raspberry Pi RP2040** co-processor that generates independent 10 kHz PWM signals for all 14 channels without burdening the main ESP32.
 
 ### PWM for intermediate temperature set-points
 
-The MEMS hot plate thermal time constant is typically in the 1–50 ms range. Temperature modulation sequences are typically stepped (discrete levels held for seconds), not rapidly dithered, so PWM frequency is not a primary concern for the modulation waveform itself.
+The MEMS hot plate thermal time constant is typically in the 1–50 ms range. Temperature modulation sequences are typically stepped (discrete levels held for seconds), not rapidly dithered.
 
-If PWM is used to set intermediate power levels within a modulation step, the duty cycle must be set based on **power equivalence**, not average voltage:
+Where PWM is used to set intermediate power levels within a modulation step, the duty cycle must be set based on **power equivalence**, not average voltage:
 
 ```
 D = (V_target / V_rail)²
@@ -179,7 +174,7 @@ For example, to achieve the equivalent of a 2.0 V heater drive from the 2.5 V ra
 D = (2.0 / 2.5)² = 0.64   (64%, not 80%)
 ```
 
-PWM frequency should exceed 10 kHz to minimise temperature ripple relative to the MEMS thermal time constant.
+The RP2040 runs PWM at 10 kHz with 13,300-step resolution (see [pwm_driver.md](pwm_driver.md)), which comfortably exceeds the minimum frequency needed to minimise temperature ripple relative to the MEMS thermal time constant.
 
 ---
 
