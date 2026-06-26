@@ -36,7 +36,7 @@ The buffer is laid out for unity gain by default, but includes unpopulated resis
 
 ## Why Delta-Sigma ADC
 
-For millivolt-level MEMS gas sensor signals with a 5 kHz bandwidth requirement, a Delta-Sigma (ΔΣ) ADC is strongly preferred over a SAR ADC.
+For millivolt-level MEMS gas sensor signals, a Delta-Sigma (ΔΣ) ADC is strongly preferred over a SAR ADC. The required signal bandwidth is set by the application mode: equilibrium gas sensing requires only fractions of 1 Hz (sensor T90 = 15–120 s), while transient thermal modulation measurements require ~1–2 kHz to resolve resistance changes during heater steps with 1–50 ms thermal time constants.
 
 ### Noise shaping and oversampling
 
@@ -44,13 +44,13 @@ For millivolt-level MEMS gas sensor signals with a 5 kHz bandwidth requirement, 
 
 ### Relaxed anti-aliasing filter requirement
 
-A SAR ADC requires a sharp multi-pole active anti-aliasing filter at its input — the filter must provide a steep rolloff at the Nyquist frequency (typically within the signal band of interest). A ΔΣ ADC oversamples at MHz rates, pushing the Nyquist boundary far above the signal band. A single passive RC with f₋₃dB well above 5 kHz is sufficient to protect the input; the ADC's internal Sinc filter enforces the precise 5 kHz brick-wall cutoff. This eliminates the multi-stage active LPF entirely.
+A SAR ADC requires a sharp multi-pole active anti-aliasing filter at its input — the filter must provide a steep rolloff at the Nyquist frequency (typically within the signal band of interest). A ΔΣ ADC oversamples at MHz rates, pushing the Nyquist boundary far above the signal band. A single passive RC is sufficient to protect the input; the ADC's internal Sinc filter enforces the signal bandwidth cutoff in the digital domain. This eliminates the multi-stage active LPF entirely.
 
 ### High DC accuracy
 
 ΔΣ architectures are engineered for DC precision: very low offset, minimal thermal drift. This matters for gas sensing, where a drifting ADC baseline could falsely signal a concentration change.
 
-### Feature comparison for 5 kHz MEMS sensing
+### Feature comparison for MEMS gas sensing
 
 | Feature | ΔΣ ADC | SAR ADC |
 |---|---|---|
@@ -76,7 +76,7 @@ With the active LPF removed:
 - **No op-amp savings.** Each sensor already requires one op-amp for the unity buffer. Without an active LPF, that is the minimum — one op-amp per sensor regardless. A MUX does not reduce this count further.
 - **Noise is introduced.** An analog MUX introduces charge injection, switching glitches, and off-channel leakage that corrupt millivolt-level signals. With no active filtering stage between the MUX and the ADC input, these artefacts feed directly into the converter. At 100 Ω source impedance (buffer output), MUX leakage error is ~15 µV — acceptable — but charge injection transients during channel switching can reach millivolt levels and require lengthy RC settling before each conversion.
 - **Scan speed is penalised.** Each MUX channel switch requires RC settling time (~2 ms at the passive RC values) before a valid conversion can begin. With a multichannel ADC, all channels convert continuously or on-demand with no switching overhead.
-- **Simultaneous sampling.** A multichannel ΔΣ ADC can sample all channels simultaneously (or with tightly controlled skew), which is preferable for e-nose measurements where cross-sensor timing matters.
+- **No switching overhead.** With a multichannel ADC, all channels are available without MUX settling delays, allowing high-rate scanning across all sensors during any given heater transient.
 
 ---
 
@@ -90,7 +90,16 @@ A CMOS-input op-amp in unity-gain (voltage follower) configuration placed within
 
 ### 2. Passive RC anti-aliasing filter
 
-A single-pole passive RC immediately after the buffer. The RC needs only to attenuate energy well above the signal band — the ΔΣ ADC's internal Sinc filter enforces the 5 kHz cutoff. A typical design targets f₋₃dB ≈ 20–50 kHz (e.g. R = 1 kΩ, C = 10 nF → f₋₃dB ≈ 16 kHz). Exact values are chosen once the ADC input impedance is confirmed.
+A single-pole passive RC immediately after the buffer. Its cutoff is set by two competing constraints:
+
+- **Lower bound — signal bandwidth:** BRIAN 2.0 uses temperature modulation and captures resistance *during* heater transients (not just at equilibrium). The MEMS hot-plate thermal time constant is 1–50 ms; to resolve the transient shape faithfully requires bandwidth to approximately 5× the highest frequency component of the fastest transient, giving a **minimum cutoff of ~1 kHz**.
+- **Upper bound — PWM noise rejection:** The heater PWM runs at 10 kHz. A passive RC at 1–2 kHz provides ~14–20 dB of analog attenuation at 10 kHz before the signal reaches the ADC, complementing the ADC's internal Sinc3 digital filter.
+
+**Target: f₋₃dB ≈ 1–2 kHz** (e.g. R = 10 kΩ, C = 10 nF → f₋₃dB ≈ 1.6 kHz).
+
+Note: a cutoff at 16 kHz (as would be implied by a "5 kHz bandwidth" spec) is too high — it provides only ~4 dB attenuation at 10 kHz and is not grounded in the actual signal physics. The equilibrium gas-sensing signal bandwidth is a fraction of 1 Hz (sensor T90 values of 15–120 s from datasheets); the thermal transient bandwidth is the binding constraint at ~1 kHz.
+
+Exact R and C values are confirmed once the ADC input impedance is known, to ensure the source impedance of the RC does not load the ADC input.
 
 ### 3. ΔΣ ADC(s)
 
@@ -99,8 +108,8 @@ One or more ΔΣ ADCs digitise all 14 sensor channels. A single 14- or 16-channe
 Key requirements per device:
 
 - 24-bit resolution
-- Configurable output data rate covering ≥ 5 kHz per channel, or high aggregate throughput with multiplexed internal scanning
-- Sinc filter configurable to enforce 5 kHz bandwidth
+- Output data rate ≥ 32 kSPS per channel for transient thermal capture (≥ 1 kSPS acceptable for equilibrium-only use)
+- Sinc filter passband flat to ≥ 2 kHz
 - SPI or I²C compatible with the MCU, supporting multi-device bus sharing
 - Single 3.3 V supply
 
@@ -128,9 +137,9 @@ Three realistic options are evaluated below. No single ≥14-channel ΔΣ ADC ex
 | Package | WQFN-48 |
 | Approx. price | ~$8–12 each (LCSC/Mouser, small qty) |
 
-**Why recommended:** All 8 channels sample simultaneously, 3.3 V single-supply, well-supported by TI with good application notes, straightforward dual-device SPI topology. At 32 kSPS the Sinc3 filter is ~−1.4 dB at 5 kHz — acceptable passband flatness for gas sensing. The passive RC cutoff (f₋₃dB ≈ 16–50 kHz) should be set above 5 kHz so the ADC's Sinc3 rolloff defines the effective signal bandwidth.
+**Why recommended:** The ADS131M08 includes a built-in PGA (gains 1–128), which directly amplifies millivolt-level sensor signals before digitisation without requiring external gain stages. This makes the gain-upgrade provision on the unity buffer (trace jumper + resistor pads) a fallback rather than a necessity. Combined with 3.3 V single-supply operation — no additional power rail required — 32 kSPS per channel, and strong TI application note support, this is the most self-contained solution for the signal chain. At 32 kSPS the Sinc3 filter is ~−0.1 dB at 1 kHz and −3 dB at 8.7 kHz, flat across the full thermal transient bandwidth.
 
-**ODR setting for 5 kHz bandwidth:** Use 32 kSPS. This gives Sinc3 −3 dB at ~8.7 kHz and −1.4 dB at 5 kHz. If a harder cutoff at 5 kHz is needed, use 16 kSPS (Sinc3 −3 dB at ~4.4 kHz) and accept slight attenuation at the band edge.
+**ODR setting for thermal transient capture:** Use 32 kSPS. This gives one sample every ~31 µs, resolving thermal transients with time constants ≥ 1 ms with ample fidelity. The Sinc3 −3 dB point at 8.7 kHz is well above the 1–2 kHz signal bandwidth, so the ADC filter does not limit the measurement. For equilibrium-only measurements (no transient capture), 1–4 kSPS is sufficient and reduces noise further via averaging.
 
 ---
 
@@ -149,7 +158,7 @@ Three realistic options are evaluated below. No single ≥14-channel ΔΣ ADC ex
 
 **Advantage:** Single chip covers all 14 channels, simplifying routing and firmware.
 
-**Drawback:** Requires a 5 V analog supply rail. If the BRIAN 2.0 power architecture does not already include 5 V, a dedicated LDO or boost converter would need to be added. Internally multiplexed — channels are not sampled simultaneously (though at ~7.8 kSPS per channel the inter-channel delay is ~128 µs, negligible for gas sensing timescales). Consider this option if a 5 V rail is already present or easy to add.
+**Drawbacks:** Requires a 5 V analog supply rail — if not already present, adds a boost converter or LDO to the BOM. No built-in PGA, so external gain stages or the buffer's gain-upgrade provision would be needed for millivolt-level signals. Internally multiplexed (not simultaneous), though at ~7.8 kSPS per channel the inter-channel delay of ~128 µs is negligible for gas sensing timescales.
 
 ---
 
@@ -179,9 +188,10 @@ Three realistic options are evaluated below. No single ≥14-channel ΔΣ ADC ex
 |---|---|---|---|
 | Chips | 2 | **1** | 2 |
 | 3.3 V supply | ✅ | ❌ (needs 5 V AVDD) | ✅ |
-| Simultaneous sampling | ✅ | ❌ | ❌ |
-| ODR headroom above 5 kHz | ✅ 32 kSPS | ✅ ~7.8 kSPS/ch | ✅ 125 kSPS |
+| Simultaneous sampling | ✅ (not critical with individual heater control) | ❌ | ❌ |
+| Per-channel ODR | ✅ 32 kSPS | ✅ ~7.8 kSPS/ch (sufficient for 1–2 kHz BW) | ✅ 125 kSPS |
 | BOM cost (2 devices) | ~$20–24 | ~$12–18 | **~$8–14** |
+| Built-in PGA | ✅ (1–128×) | ❌ | ❌ |
 | Support / app notes | Excellent | Good | Moderate |
 | **Verdict** | **Recommended** | If 5 V available | Budget fallback |
 
@@ -234,13 +244,13 @@ Suitable parts: OPA2334 (25 µV offset, 1 pA Ib, dual SOT-23-8), TLV2372 (0.5 mV
 
 No active low-pass filter is needed between the sensor and the ADC for three reasons:
 
-1. **ΔΣ internal filter.** The ADC's Sinc digital filter enforces the precise 5 kHz bandwidth limit with better roll-off stability than any analog filter (no component drift, no tolerances to match across channels).
+1. **ΔΣ internal filter.** The ADC's Sinc digital filter enforces the signal bandwidth limit (−3 dB at 8.7 kHz at 32 kSPS) with better roll-off stability than any analog filter — no component drift, no tolerances to match across channels.
 
 2. **Heater supply noise is handled upstream.** The LC post-filter on each buck converter output (see `heater_power.md`) reduces V_H ripple to sub-millivolt levels before it reaches the sensor heater pins.
 
-3. **Synchronised sampling.** When PWM is used for intermediate heater temperatures, the MCU triggers ADC conversions after switching transients have decayed. Only steady-state readings are captured.
+3. **Synchronised sampling (equilibrium mode).** When capturing equilibrium readings rather than transients, the MCU can trigger ADC conversions after PWM switching transients have decayed, further reducing PWM coupling.
 
-The passive RC serves only as an ADC input protection filter to prevent large transients from overdriving the converter input. It is not a noise filter.
+The passive RC (f₋₃dB ≈ 1–2 kHz) serves dual purpose: it attenuates 10 kHz PWM noise by ~14–20 dB before the ADC, and protects the ADC input from large transients. It is not a substitute for the ADC's digital filter but provides meaningful analog pre-filtering.
 
 ---
 
@@ -254,8 +264,8 @@ Indicative values; actual throughput depends on the chosen ADC's per-channel con
 
 | Mode | Time per sensor | 14 sensors |
 |---|---|---|
-| 1 conversion @ 5 kHz ODR | ~0.2 ms | **~2.8 ms** |
-| 4 averages @ 5 kHz ODR | ~0.8 ms | **~11 ms** |
+| 1 conversion @ 32 kSPS (transient mode) | ~0.031 ms | **~0.43 ms** |
+| 1 conversion @ 1 kSPS (equilibrium mode) | ~1 ms | **~14 ms** |
 | 1 conversion @ 100 SPS | ~10 ms | **~140 ms** |
 
 ### Full scan time (with temperature modulation, Strategy B)
@@ -281,7 +291,7 @@ Chemical response time of resistive gas sensors (seconds to minutes for equilibr
 ## Open Questions
 
 - **ADC part selection and count:** Three candidates are evaluated above (ADS131M08, ADS1258, MCP3914). Confirm final choice and whether the board includes or can add a 5 V rail (required for ADS1258).
-- **Output Data Rate:** Confirm ODR per channel and map Sinc filter decimation ratio to lock bandwidth at 5 kHz.
+- **Output Data Rate:** 32 kSPS recommended for transient thermal capture (resolves ≥ 1 ms transients); lower ODR (1–4 kSPS) acceptable for equilibrium-only measurements. Confirm based on measurement protocol.
 - **Power budget:** ΔΣ ADCs consume more quiescent current than SAR. Confirm acceptable given BRIAN 2.0 power supply design.
 - **RC component values:** Calculate R and C once ADC input impedance is confirmed.
-- **Simultaneous vs. sequential sampling:** Confirm whether the chosen ADC samples all channels truly simultaneously or sequences internally; impacts timing budget and cross-channel correlation.
+- **Sampling strategy:** With individual heater control, simultaneous cross-channel sampling is not critical. Per-channel ODR and aggregate scan rate across all 14 channels during a transient are the relevant figures. Confirm scan rate is sufficient to track the fastest heater transient across all active channels.
