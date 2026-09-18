@@ -43,7 +43,15 @@
 | ADS2  | `0x49`      | EtOH (ethanol)      | H₂S   | NO₂ | NH₃  |
 | ADS3  | `0x4A`      | CO                  | Smoke | H₂  | —    |
 
-> **Note:** VOC (ADS1 A2) and NH₃ (ADS2 A3) are read at `GAIN_SIXTEEN` due to their low output voltage range. All other channels use `GAIN_ONE`.
+> **Note (per-channel ADC gain):** to match the code in `src/main.cpp`, the two low-output channels use a higher gain than the rest:
+>
+> | Channel(s)                          | Gain          | Full-scale range |
+> | ----------------------------------- | ------------- | ---------------- |
+> | VOC (ADS1 A2)                       | `GAIN_FOUR`   | ±1.024 V         |
+> | NH₃ (ADS2 A3)                       | `GAIN_SIXTEEN`| ±0.256 V         |
+> | all other gas channels              | `GAIN_ONE`    | ±4.096 V         |
+>
+> Each channel's voltage is converted with the gain that was actually used for the reading (see `readChannelVolts()`), and a warning is logged on Serial if a reading is pinned at full scale (input above the selected range, so the value is clipped). Any input above the full-scale range for the selected gain clips silently in the reported count, so the higher-gain channels also have the smallest headroom.
 
 ## Environmental Sensor
 
