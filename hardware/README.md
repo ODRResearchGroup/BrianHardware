@@ -37,6 +37,8 @@
 
 > The PCB design is available in Autodesk Fusion 360: [MEMS Breakout Board](https://a360.co/4dJqguX)
 
+> **Legacy ADS1015 boards:** the firmware uses the `Adafruit_ADS1115` driver for all three boards. No per-device configuration is needed for older noses that were populated with the pin-compatible **ADS1015** instead: the ADS1015 left-justifies its 12-bit result into the top 12 bits of the same conversion register, so the ADS1115 driver reads it back as `value × 16` and `computeVolts()` divides by the full 16-bit scale — the reported voltage is correct, just at the chip's native 12-bit resolution (the low 4 bits are always zero). Reads poll the conversion-complete bit rather than using a fixed delay, so the differing data-rate encoding between the two chips only affects conversion latency, not the result. The two chips share an I2C address and register map and expose no device-ID register, so there is no reliable way to auto-detect which is fitted — and no need to, since the ADS1115 driver is correct for both.
+
 | Board | I2C Address | A0                  | A1    | A2  | A3   |
 | ----- | ----------- | ------------------- | ----- | --- | ---- |
 | ADS1  | `0x48`      | HCHO (formaldehyde) | CH₄   | VOC | Odor |
