@@ -101,6 +101,7 @@ See the hardware docs in [`hardware/`](./hardware):
 - [Hardware Overview (V1)](./hardware/README.md)
 - [V2 Design Plans](./hardware/V2_design.md)
 - [Heater Power Architecture](./hardware/heater_power.md)
+- [PCB Layout Feedback (2026-07-14)](./hardware/pcb_layout_feedback_2026-07-14.md)
 
 ### Repository Layout
 
