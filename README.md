@@ -119,6 +119,6 @@ See the hardware docs in [`hardware/`](./hardware):
 
 ### Troubleshooting
 
-- **`ADS1015 not found` in logs:** check I2C wiring, addresses (`0x48`, `0x49`, `0x4A`), and power rails.
+- **`ADS1115 not found` in logs:** check I2C wiring, addresses (`0x48`, `0x49`, `0x4A`), and power rails.
 - **No BLE notifications:** confirm the client enabled notifications (CCCD) after connecting.
 - **`BME680 not found`:** confirm Qwiic/I2C wiring and address (`0x77`, fallback `0x76`).
