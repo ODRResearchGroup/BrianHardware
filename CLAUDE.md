@@ -84,6 +84,16 @@ Everything is in one file:
 | Altitude | ESS | `0x2A69` | m (assumes 1013.25 hPa sea level) |
 | BME680 gas resistance | custom | `5b0e3c0b-1a44-4b76-82ee-8c2adc2dd8e9` | Ω |
 | Time sync (write) | custom | `a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d` | Unix seconds, 8 or 4 bytes LE; encrypted link required |
+| Board status | custom | `407fd299-d6ed-45ed-ab21-437f101c8acd` | 1-byte bitmask, read-only, captured once at boot (see below) |
+
+**Board status bitmask** (`BOARD_STATUS_CHARACTERISTIC_UUID`): bit *n* set = that I2C board was detected in `initMEMS()`/`initBME680()` at boot, independent of whether its sensor characteristics were created. Not updated after boot (no live re-check). Battery monitor status is out of scope (tracked separately in #16).
+
+| Bit | Board |
+|---|---|
+| 0 | ADS1 (`0x48`): HCHO, CH₄, VOC, Odor |
+| 1 | ADS2 (`0x49`): EtOH, H₂S, NO₂, NH₃ |
+| 2 | ADS3 (`0x4A`): CO, Smoke, H₂ |
+| 3 | BME680 |
 
 When adding new data (e.g. battery), prefer standard SIG services/characteristics where they exist (Battery Service `0x180F` / Battery Level `0x2A19`), and document them here and in `README.md`.
 
