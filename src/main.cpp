@@ -34,6 +34,7 @@
 #include <SD.h>
 #include <SPI.h>
 #include <Wire.h>
+#include <esp_mac.h>
 #include <sys/time.h>
 
 BLEServer *pServer = NULL;
@@ -82,9 +83,27 @@ BLECharacteristic *altitudeCharacteristic = NULL;
 // Time synchronization characteristic
 BLECharacteristic *timeSyncCharacteristic = NULL;
 
-// Board structure to hold information about each ADS1015 board
+// Board status characteristic: reports which I2C boards were detected at
+// boot, independent of whether any per-sensor characteristics exist for them.
+// Always created (unlike the sensor characteristics above), so clients can
+// show hardware health even for a board that is entirely missing.
+#define BOARD_STATUS_CHARACTERISTIC_UUID                                      \
+  "407fd299-d6ed-45ed-ab21-437f101c8acd"
+BLECharacteristic *boardStatusCharacteristic = NULL;
+
+// Bit layout of the board status byte. Status is captured once at boot
+// (matches initMEMS()/initBME680()) and never updated afterwards.
+constexpr uint8_t BOARD_STATUS_ADS1_BIT = 0;   // 0x48: HCHO, CH4, VOC, Odor
+constexpr uint8_t BOARD_STATUS_ADS2_BIT = 1;   // 0x49: EtOH, H2S, NO2, NH3
+constexpr uint8_t BOARD_STATUS_ADS3_BIT = 2;   // 0x4A: CO, Smoke, H2
+constexpr uint8_t BOARD_STATUS_BME680_BIT = 3; // Environmental sensor
+
+// Board structure to hold information about each ADS1115 board.
+// The MEMS breakouts carry ADS1115 (16-bit) chips; using the ADS1115 driver
+// preserves the full 16-bit resolution (the ADS1015 driver would right-shift
+// every reading by 4 bits, giving only 12-bit resolution).
 struct Board {
-  Adafruit_ADS1015 ads;
+  Adafruit_ADS1115 ads;
   uint8_t i2c_address;
   bool present;
 };
@@ -94,8 +113,8 @@ constexpr uint8_t boardAds1 = 0;
 constexpr uint8_t boardAds2 = 1;
 constexpr uint8_t boardAds3 = 2;
 
-// ADS1015 gain settings per sensor.
-// TODO: expose these as configurable settings from the web interface.
+// ADS1115 gain settings per sensor.
+// TODO: expose these as configurable settings from the web interface (see #7).
 constexpr adsGain_t GAIN_BOARD1_DEFAULT = GAIN_ONE; // CH4, HCHO, Odor
 constexpr adsGain_t GAIN_VOC = GAIN_FOUR;           // VOC (board 1, channel 2)
 constexpr adsGain_t GAIN_BOARD2_DEFAULT = GAIN_ONE; // EtOH, H2S, NO2
@@ -103,9 +122,9 @@ constexpr adsGain_t GAIN_NH3 = GAIN_SIXTEEN;        // NH3 (board 2, channel 3)
 constexpr adsGain_t GAIN_BOARD3_DEFAULT = GAIN_ONE; // CO, Smoke, H2
 
 // Array of boards
-Board boards[boardCount] = {{Adafruit_ADS1015(), 0x48, false},
-                            {Adafruit_ADS1015(), 0x49, false},
-                            {Adafruit_ADS1015(), 0x4A, false}};
+Board boards[boardCount] = {{Adafruit_ADS1115(), 0x48, false},
+                            {Adafruit_ADS1115(), 0x49, false},
+                            {Adafruit_ADS1115(), 0x4A, false}};
 
 // Function to get a board by number
 Board *getBoard(uint8_t board_num) {
@@ -147,10 +166,15 @@ void initMEMS() {
   for (size_t i = 0; i < boardCount; i++) {
     if (boards[i].ads.begin(boards[i].i2c_address)) {
       boards[i].present = true;
-      Serial.print("Found ADS1015 at 0x");
+      // Set the data rate explicitly. 128 SPS (the ADS1115 default) gives ~7.8
+      // ms per conversion; a full sweep of 11 channels then takes well under
+      // 100 ms, comfortably inside the 5 s notify cycle. Setting it here also
+      // documents the choice rather than relying on the library default.
+      boards[i].ads.setDataRate(RATE_ADS1115_128SPS);
+      Serial.print("Found ADS1115 at 0x");
       Serial.println(boards[i].i2c_address, HEX);
     } else {
-      Serial.print("ADS1015 not found at 0x");
+      Serial.print("ADS1115 not found at 0x");
       Serial.println(boards[i].i2c_address, HEX);
     }
   }
@@ -165,8 +189,40 @@ void initMEMS() {
   }
 
   if (!any_present) {
-    Serial.println("ERROR: No ADS1015 boards found!");
+    Serial.println("ERROR: No ADS1115 boards found!");
   }
+}
+
+// Read one single-ended channel at a specific gain and return the voltage.
+//
+// Adafruit_ADS1X15::computeVolts() converts a raw count using the gain that is
+// *currently* set on the object, so the voltage must be computed with the same
+// gain that was used for the reading, BEFORE the default gain is restored.
+// Doing the set/read/convert/restore in one place keeps this correct as more
+// per-channel gains are added (see #17, #7).
+//
+// The board's default gain is restored on exit so callers that read at a
+// non-default gain don't leave the board in an unexpected state. If the raw
+// count is at (or beyond) full scale the input exceeds the selected range and
+// the reported voltage is clipped, so a warning is logged.
+float readChannelVolts(Board *board, uint8_t channel, adsGain_t gain,
+                       adsGain_t defaultGain, const char *label) {
+  board->ads.setGain(gain);
+  int16_t raw = board->ads.readADC_SingleEnded(channel);
+  // Convert while the reading's gain is still set.
+  float volts = board->ads.computeVolts(raw);
+  board->ads.setGain(defaultGain);
+
+  // Single-ended readings span 0..32767 counts on the ADS1115. A count pinned
+  // at the positive full-scale limit means the input voltage is above the
+  // selected range and the value is silently clipped.
+  if (raw >= 32767) {
+    Serial.print("WARNING: ");
+    Serial.print(label);
+    Serial.println(
+        " reading at full scale - value clipped, reduce gain / range");
+  }
+  return volts;
 }
 
 // Helper function to add BLE2902 descriptor for notifications
@@ -242,7 +298,12 @@ void setup() {
   initMEMS();
   initBME680();
   // Create the BLE Device
-  BLEDevice::init("BRIAN");
+  uint8_t bluetoothMac[6];
+  esp_read_mac(bluetoothMac, ESP_MAC_BT);
+  char deviceName[16];
+  snprintf(deviceName, sizeof(deviceName), "Brian-%02X%02X%02X",
+           bluetoothMac[3], bluetoothMac[4], bluetoothMac[5]);
+  BLEDevice::init(deviceName);
   // this is for increasing the MTU size - default is 23 bytes, we can set it up
   // to 517 bytes
   BLEDevice::setMTU(517);
@@ -388,6 +449,27 @@ void setup() {
   timeSyncCharacteristic->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   timeSyncCharacteristic->setCallbacks(new TimeSyncCallbacks());
 
+  // Board status: always created, regardless of what was detected, so a
+  // client can distinguish "board missing" from "characteristic not
+  // discovered". Captured once here; never updated in loop().
+  uint8_t boardStatus = 0;
+  if (getBoard(boardAds1)->present) {
+    boardStatus |= (1 << BOARD_STATUS_ADS1_BIT);
+  }
+  if (getBoard(boardAds2)->present) {
+    boardStatus |= (1 << BOARD_STATUS_ADS2_BIT);
+  }
+  if (getBoard(boardAds3)->present) {
+    boardStatus |= (1 << BOARD_STATUS_ADS3_BIT);
+  }
+  if (bme680_present) {
+    boardStatus |= (1 << BOARD_STATUS_BME680_BIT);
+  }
+  boardStatusCharacteristic = customService->createCharacteristic(
+      BLEUUID(BOARD_STATUS_CHARACTERISTIC_UUID),
+      BLECharacteristic::PROPERTY_READ);
+  boardStatusCharacteristic->setValue(&boardStatus, 1);
+
   // we are starting both services
   essService->start();
   customService->start();
@@ -410,39 +492,35 @@ void loop() {
     // Read from board 0 (ADS1) sensors if present
     if (getBoard(boardAds1)->present) {
       Board *board = getBoard(boardAds1);
-      board->ads.setGain(GAIN_BOARD1_DEFAULT);
-      // Read raw ADC value for formaldehyde
-      int16_t hchoRaw = board->ads.readADC_SingleEnded(0);
-      // Converting to voltage using the function from the library
-      float hchoVolt = board->ads.computeVolts(hchoRaw);
-      // Here we are sending the voltage value as float
+
+      // Formaldehyde sensor
+      float hchoVolt = readChannelVolts(board, 0, GAIN_BOARD1_DEFAULT,
+                                        GAIN_BOARD1_DEFAULT, "HCHO");
+      // Send the voltage value as a 4-byte float over BLE
       if (hchoCharacteristic != NULL) {
         hchoCharacteristic->setValue((uint8_t *)&hchoVolt, sizeof(hchoVolt));
-        // Send float value directly over BLE (4 bytes)
         hchoCharacteristic->notify();
       }
 
       // CH4 sensor
-      int16_t ch4Raw = board->ads.readADC_SingleEnded(1);
-      float ch4Volt = board->ads.computeVolts(ch4Raw);
+      float ch4Volt = readChannelVolts(board, 1, GAIN_BOARD1_DEFAULT,
+                                       GAIN_BOARD1_DEFAULT, "CH4");
       if (ch4Characteristic != NULL) {
         ch4Characteristic->setValue((uint8_t *)&ch4Volt, sizeof(ch4Volt));
         ch4Characteristic->notify();
       }
 
-      // VOC sensor
-      board->ads.setGain(GAIN_VOC);
-      int16_t vocRaw = board->ads.readADC_SingleEnded(2);
-      board->ads.setGain(GAIN_BOARD1_DEFAULT);
-      float vocVolt = board->ads.computeVolts(vocRaw);
+      // VOC sensor (read at a higher gain for its lower output range)
+      float vocVolt =
+          readChannelVolts(board, 2, GAIN_VOC, GAIN_BOARD1_DEFAULT, "VOC");
       if (vocCharacteristic != NULL) {
         vocCharacteristic->setValue((uint8_t *)&vocVolt, sizeof(vocVolt));
         vocCharacteristic->notify();
       }
 
       // Odor sensor
-      int16_t odorRaw = board->ads.readADC_SingleEnded(3);
-      float odorVolt = board->ads.computeVolts(odorRaw);
+      float odorVolt = readChannelVolts(board, 3, GAIN_BOARD1_DEFAULT,
+                                        GAIN_BOARD1_DEFAULT, "Odor");
       if (odorCharacteristic != NULL) {
         odorCharacteristic->setValue((uint8_t *)&odorVolt, sizeof(odorVolt));
         odorCharacteristic->notify();
@@ -452,36 +530,34 @@ void loop() {
     // Read from board 1 (ADS2) sensors if present
     if (getBoard(boardAds2)->present) {
       Board *board = getBoard(boardAds2);
-      board->ads.setGain(GAIN_BOARD2_DEFAULT);
+
       // Ethanol sensor
-      int16_t etohRaw = board->ads.readADC_SingleEnded(0);
-      float etohVolt = board->ads.computeVolts(etohRaw);
+      float etohVolt = readChannelVolts(board, 0, GAIN_BOARD2_DEFAULT,
+                                        GAIN_BOARD2_DEFAULT, "EtOH");
       if (etohCharacteristic != NULL) {
         etohCharacteristic->setValue((uint8_t *)&etohVolt, sizeof(etohVolt));
         etohCharacteristic->notify();
       }
 
       // H2S sensor
-      int16_t h2sRaw = board->ads.readADC_SingleEnded(1);
-      float h2sVolt = board->ads.computeVolts(h2sRaw);
+      float h2sVolt = readChannelVolts(board, 1, GAIN_BOARD2_DEFAULT,
+                                       GAIN_BOARD2_DEFAULT, "H2S");
       if (h2sCharacteristic != NULL) {
         h2sCharacteristic->setValue((uint8_t *)&h2sVolt, sizeof(h2sVolt));
         h2sCharacteristic->notify();
       }
 
       // NO2 sensor
-      int16_t no2Raw = board->ads.readADC_SingleEnded(2);
-      float no2Volt = board->ads.computeVolts(no2Raw);
+      float no2Volt = readChannelVolts(board, 2, GAIN_BOARD2_DEFAULT,
+                                       GAIN_BOARD2_DEFAULT, "NO2");
       if (no2Characteristic != NULL) {
         no2Characteristic->setValue((uint8_t *)&no2Volt, sizeof(no2Volt));
         no2Characteristic->notify();
       }
 
-      // NH3 sensor
-      board->ads.setGain(GAIN_NH3);
-      int16_t nh3Raw = board->ads.readADC_SingleEnded(3);
-      board->ads.setGain(GAIN_BOARD2_DEFAULT);
-      float nh3Volt = board->ads.computeVolts(nh3Raw);
+      // NH3 sensor (read at a higher gain for its lower output range)
+      float nh3Volt =
+          readChannelVolts(board, 3, GAIN_NH3, GAIN_BOARD2_DEFAULT, "NH3");
       if (nh3Characteristic != NULL) {
         nh3Characteristic->setValue((uint8_t *)&nh3Volt, sizeof(nh3Volt));
         nh3Characteristic->notify();
@@ -491,26 +567,26 @@ void loop() {
     // Read from board 2 (ADS3) sensors if present
     if (getBoard(boardAds3)->present) {
       Board *board = getBoard(boardAds3);
-      board->ads.setGain(GAIN_BOARD3_DEFAULT);
+
       // CO sensor
-      int16_t coRaw = board->ads.readADC_SingleEnded(0);
-      float coVolt = board->ads.computeVolts(coRaw);
+      float coVolt = readChannelVolts(board, 0, GAIN_BOARD3_DEFAULT,
+                                      GAIN_BOARD3_DEFAULT, "CO");
       if (coCharacteristic != NULL) {
         coCharacteristic->setValue((uint8_t *)&coVolt, sizeof(coVolt));
         coCharacteristic->notify();
       }
 
       // Smoke sensor
-      int16_t smokeRaw = board->ads.readADC_SingleEnded(1);
-      float smokeVolt = board->ads.computeVolts(smokeRaw);
+      float smokeVolt = readChannelVolts(board, 1, GAIN_BOARD3_DEFAULT,
+                                         GAIN_BOARD3_DEFAULT, "Smoke");
       if (smokeCharacteristic != NULL) {
         smokeCharacteristic->setValue((uint8_t *)&smokeVolt, sizeof(smokeVolt));
         smokeCharacteristic->notify();
       }
 
       // H2 sensor
-      int16_t h2Raw = board->ads.readADC_SingleEnded(2);
-      float h2Volt = board->ads.computeVolts(h2Raw);
+      float h2Volt = readChannelVolts(board, 2, GAIN_BOARD3_DEFAULT,
+                                      GAIN_BOARD3_DEFAULT, "H2");
       if (h2Characteristic != NULL) {
         h2Characteristic->setValue((uint8_t *)&h2Volt, sizeof(h2Volt));
         h2Characteristic->notify();

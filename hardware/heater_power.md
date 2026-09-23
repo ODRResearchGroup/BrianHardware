@@ -246,25 +246,38 @@ Each switching converter draws pulsed current from the input rail. Place:
 - 100 µF bulk capacitor at the input rail entry point
 - 1–4.7 Ω series resistor or ferrite bead between the main supply rail and the converter input to attenuate high-frequency noise propagation
 
-### Additional LC post-filter
+### Second-stage output filter and regulator selection (decided)
 
-For sensor applications where supply noise is critical, a second-stage LC low-pass filter between each buck output and the sensor heater rail is strongly recommended:
+> **Decision (2026-07):** keep the fixed-output MPM3805 modules and add a passive second-stage LC filter **outside** the regulator control loop, with a low-DCR filter inductor so the resulting droop is negligible and needs no compensation. Remote-sensing through the filter was evaluated and rejected (see below). A cleaner load-sensing part (TPS62913) is noted as the upgrade path if µV-clean rails are ever needed.
 
-```
-Buck output → [L2: 10 µH] → [C2: 47 µF ceramic + 100 µF bulk] → sensor heater rail
-```
+**Regulator part:** fixed-output **MPM3805GQB-18** (1.8 V) and **MPM3805GQB-25** (2.5 V) — MPS 0.6 A synchronous buck modules with integrated inductor. Fixed variants need only input/output capacitors (no FB divider), minimising component count. *Schematic fix:* confirm the 1.8 V sheet uses the **-18** part — the current draft carries the `-25` (2.5 V) symbol value on the 1.8 V module.
 
-This provides an additional ~40 dB of attenuation at the switching frequency, reducing residual ripple from ~10 mV to the sub-millivolt range.
-
-The corner frequency of this filter:
+**Second-stage filter — kept outside the control loop.** Between each buck's local output and the sensor heater rail:
 
 ```
-f_corner = 1 / (2π × √(L2 × C2))
-         = 1 / (2π × √(10×10⁻⁶ × 47×10⁻⁶))
-         ≈ 7.3 kHz
+Buck OUT (local 10–22 µF cap) → [L2: 10 µH, low-DCR] → [47 µF ceramic + 100 µF bulk] → sensor heater rail
 ```
 
-This is comfortably below a 500 kHz–1 MHz switching frequency. The inductor's DCR causes a small DC voltage drop; at 179 mA load and 0.3 Ω DCR, the drop is ~54 mV on the 1.8 V rail. Account for this in the buck output set-point by targeting ~1.85 V at the converter output.
+```
+f_corner = 1 / (2π × √(L2 × C2)) = 1 / (2π × √(10×10⁻⁶ × 47×10⁻⁶)) ≈ 7.3 kHz
+```
+
+At ~3 MHz (the MPM3805's constant-on-time switching frequency) this adds ~40 dB of attenuation, pulling residual ripple from ~10 mV into the sub-mV range. The regulator continues to **sense at its local output** (OUT_S at the local OUT cap), so the filter sits *after* the feedback point and cannot destabilise the loop. Keep the MPS-recommended local output cap (10 µF; 22 µF on the 2.5 V rail for stability) — the COT loop needs that local ripple.
+
+**Why not remote-sense through the filter to cancel droop.** The MPM3805 uses **constant-on-time (COT)** control, which relies on ripple at the feedback node to time each switching cycle. On the fixed parts, OUT_S (pin 12) is the *true* regulation sense node (verified in the datasheet: on fixed versions the FB pin is an internal test pad, and OUT_S drives the internal reference comparator). So OUT_S could in principle be Kelvin-connected downstream of L2 to regulate the rail *at the load* and auto-cancel the inductor drop. **Rejected:** placing the LC between OUT and OUT_S attenuates exactly the ripple the COT loop needs, risking switching jitter / instability. The filter is therefore kept outside the loop.
+
+**Handling the droop — low-DCR inductor, no compensation.** With the filter outside the loop the L2 DCR drop (I_load × DCR) is uncompensated. Rather than pre-trimming the set-point (not possible on fixed parts, and a fixed offset only corrects one load level), pick a **low-DCR filter inductor** so the drop is small:
+
+| Rail | I_load (peak) | DCR for ≤ 15 mV drop |
+|------|---------------|----------------------|
+| 1.8 V | 179 mA | ≤ 80 mΩ |
+| 2.5 V | 100 mA | ≤ 150 mΩ |
+
+A 10 µH shielded inductor with < 80 mΩ DCR is readily available. Note the **dominant** heater-voltage error is the fixed regulator's own **±2.5 % tolerance** (1.8 V part: 1.755–1.845 V), not the post-filter drop — so a sub-15 mV droop is second-order. The stacked worst case (regulator low + droop) may sit a few percent below nominal, marginally outside the SMD sensors' ±0.05 V window; this is a **systematic, measurable heater-power offset (~93 % of rated), acceptable for a characterisation prototype** — analogous to running GM-602B at 1.8 V vs. its 1.9 V nominal. If tighter heater-voltage accuracy is later required, that is the trigger to adopt the load-sensing regulator below.
+
+**Cleaner alternative (noted, not adopted this spin):** TI **TPS62913 / TPSM82913** — a current-mode low-noise buck built for a second-stage filter: it senses HF ripple *before* the filter and DC *after* it, with the LC internally compensated, so it regulates at the load (droop-free) and stays stable with the filter in-loop, reaching < 10 µV_RMS ripple. Larger, higher-Iq, and rated well above this load — overkill for a resistive heater whose thermal mass already filters HF, but the recommended choice if/when a µV-clean rail is needed (most valuably on the ADC analog/reference rail, not the heaters).
+
+**Prototype provision:** lay down the L2 + bulk-cap footprints with a **0 Ω link option across L2**, so the board can be built single-stage first, characterised, and the filter populated only if measured ripple warrants it — consistent with the flexible-prototype goal.
 
 ### PCB layout guidelines
 

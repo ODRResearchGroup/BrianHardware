@@ -101,6 +101,7 @@ See the hardware docs in [`hardware/`](./hardware):
 - [Hardware Overview (V1)](./hardware/README.md)
 - [V2 Design Plans](./hardware/V2_design.md)
 - [Heater Power Architecture](./hardware/heater_power.md)
+- [PCB Layout Feedback (2026-07-14)](./hardware/pcb_layout_feedback_2026-07-14.md)
 
 ### Repository Layout
 
@@ -116,9 +117,10 @@ See the hardware docs in [`hardware/`](./hardware):
 - Standard service: Environmental Sensing Service (`0x181A`)
 - Custom service: `de664a17-7db4-449f-97ba-5514e19a9d94`
 - Time sync characteristic (write): `a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d`
+- Board status characteristic (read, custom service): `407fd299-d6ed-45ed-ab21-437f101c8acd` — 1-byte bitmask, bit 0/1/2 = ADS1/ADS2/ADS3 detected, bit 3 = BME680 detected, captured once at boot
 
 ### Troubleshooting
 
-- **`ADS1015 not found` in logs:** check I2C wiring, addresses (`0x48`, `0x49`, `0x4A`), and power rails.
+- **`ADS1115 not found` in logs:** check I2C wiring, addresses (`0x48`, `0x49`, `0x4A`), and power rails.
 - **No BLE notifications:** confirm the client enabled notifications (CCCD) after connecting.
 - **`BME680 not found`:** confirm Qwiic/I2C wiring and address (`0x77`, fallback `0x76`).
