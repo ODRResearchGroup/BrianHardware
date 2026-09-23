@@ -83,6 +83,21 @@ BLECharacteristic *altitudeCharacteristic = NULL;
 // Time synchronization characteristic
 BLECharacteristic *timeSyncCharacteristic = NULL;
 
+// Board status characteristic: reports which I2C boards were detected at
+// boot, independent of whether any per-sensor characteristics exist for them.
+// Always created (unlike the sensor characteristics above), so clients can
+// show hardware health even for a board that is entirely missing.
+#define BOARD_STATUS_CHARACTERISTIC_UUID                                      \
+  "407fd299-d6ed-45ed-ab21-437f101c8acd"
+BLECharacteristic *boardStatusCharacteristic = NULL;
+
+// Bit layout of the board status byte. Status is captured once at boot
+// (matches initMEMS()/initBME680()) and never updated afterwards.
+constexpr uint8_t BOARD_STATUS_ADS1_BIT = 0;   // 0x48: HCHO, CH4, VOC, Odor
+constexpr uint8_t BOARD_STATUS_ADS2_BIT = 1;   // 0x49: EtOH, H2S, NO2, NH3
+constexpr uint8_t BOARD_STATUS_ADS3_BIT = 2;   // 0x4A: CO, Smoke, H2
+constexpr uint8_t BOARD_STATUS_BME680_BIT = 3; // Environmental sensor
+
 // Board structure to hold information about each ADS1115 board.
 // The MEMS breakouts carry ADS1115 (16-bit) chips; using the ADS1115 driver
 // preserves the full 16-bit resolution (the ADS1015 driver would right-shift
@@ -433,6 +448,27 @@ void setup() {
       BLECharacteristic::PROPERTY_WRITE);
   timeSyncCharacteristic->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   timeSyncCharacteristic->setCallbacks(new TimeSyncCallbacks());
+
+  // Board status: always created, regardless of what was detected, so a
+  // client can distinguish "board missing" from "characteristic not
+  // discovered". Captured once here; never updated in loop().
+  uint8_t boardStatus = 0;
+  if (getBoard(boardAds1)->present) {
+    boardStatus |= (1 << BOARD_STATUS_ADS1_BIT);
+  }
+  if (getBoard(boardAds2)->present) {
+    boardStatus |= (1 << BOARD_STATUS_ADS2_BIT);
+  }
+  if (getBoard(boardAds3)->present) {
+    boardStatus |= (1 << BOARD_STATUS_ADS3_BIT);
+  }
+  if (bme680_present) {
+    boardStatus |= (1 << BOARD_STATUS_BME680_BIT);
+  }
+  boardStatusCharacteristic = customService->createCharacteristic(
+      BLEUUID(BOARD_STATUS_CHARACTERISTIC_UUID),
+      BLECharacteristic::PROPERTY_READ);
+  boardStatusCharacteristic->setValue(&boardStatus, 1);
 
   // we are starting both services
   essService->start();
