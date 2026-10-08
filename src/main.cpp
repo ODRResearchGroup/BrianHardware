@@ -31,6 +31,7 @@
 
 #include <Adafruit_ADS1X15.h>
 #include <Adafruit_BME680.h>
+#include <Adafruit_LC709203F.h>
 #include <SD.h>
 #include <SPI.h>
 #include <Wire.h>
@@ -50,6 +51,7 @@ bool oldDeviceConnected = false;
 // standardized ESS UUID:
 // https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Assigned_Numbers/out/en/Assigned_Numbers.pdf
 #define SERVICE_UUID (BLEUUID((uint16_t)0x181A))
+#define BATTERY_SERVICE_UUID (BLEUUID((uint16_t)0x180F))
 // Here we are creating a custom service for sensors that do not have a
 // standardised service
 #define CUSTOM_SERVICE_UUID                                                    \
@@ -79,6 +81,9 @@ BLECharacteristic *pressureCharacteristic = NULL;
 BLECharacteristic *humidityCharacteristic = NULL;
 BLECharacteristic *gasCharacteristic = NULL;
 BLECharacteristic *altitudeCharacteristic = NULL;
+
+// Battery level characteristic
+BLECharacteristic *batteryLevelCharacteristic = NULL;
 
 // Time synchronization characteristic
 BLECharacteristic *timeSyncCharacteristic = NULL;
@@ -137,6 +142,11 @@ Board *getBoard(uint8_t board_num) {
 // BME680 environmental sensor
 Adafruit_BME680 bme680;
 bool bme680_present = false;
+
+// Battery fuel gauge
+Adafruit_LC709203F batteryMonitor;
+bool batteryMonitorPresent = false;
+
 
 // Initialize BME680 sensor and detect if present
 void initBME680() {
@@ -295,8 +305,31 @@ void setup() {
   Wire.begin();
   Wire.setClock(400000);
 
+  Serial.println("I2C scanner");
+
+  for (uint8_t address = 1; address < 127; address++) {
+      Wire.beginTransmission(address);
+      uint8_t error = Wire.endTransmission();
+    
+      if (error == 0) {
+          Serial.printf("Found device at 0x%02X\n", address);
+      }
+  }
+
   initMEMS();
   initBME680();
+
+  if (batteryMonitor.begin()) {
+    batteryMonitorPresent = true;
+    Serial.println("Found LC709203F battery monitor");
+    batteryMonitor.setAlarmVoltage(3.8f);
+    // Pack size is configured by the part being used. The 4400 mAh pack is
+    // closest to the 3000 mAh profile supported by the LC709203F library.
+    batteryMonitor.setPackSize(LC709203F_APA_3000MAH);
+  } else {
+    Serial.println("LC709203F not found or no battery connected");
+  }
+
   // Create the BLE Device
   uint8_t bluetoothMac[6];
   esp_read_mac(bluetoothMac, ESP_MAC_BT);
@@ -323,9 +356,15 @@ void setup() {
   // Default is 15 handles, which is too small for this profile and can cause
   // later characteristics to miss descriptors (e.g. missing CCCD).
   BLEService *essService = pServer->createService(SERVICE_UUID, 40);
+  BLEService *batteryService = pServer->createService(BATTERY_SERVICE_UUID, 20);
   BLEService *customService =
       pServer->createService(BLEUUID(CUSTOM_SERVICE_UUID), 50);
   // Create characteristics
+
+  batteryLevelCharacteristic = batteryService->createCharacteristic(
+      BLEUUID((uint16_t)0x2A19),
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  setupCCCDDescriptor(batteryLevelCharacteristic);
 
   // these are for ESS standardised characteristics
   // Taken partially from
@@ -449,6 +488,7 @@ void setup() {
   timeSyncCharacteristic->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   timeSyncCharacteristic->setCallbacks(new TimeSyncCallbacks());
 
+  // we are starting all services
   // Board status: always created, regardless of what was detected, so a
   // client can distinguish "board missing" from "characteristic not
   // discovered". Captured once here; never updated in loop().
@@ -472,12 +512,14 @@ void setup() {
 
   // we are starting both services
   essService->start();
+  batteryService->start();
   customService->start();
 
   // Start advertising
-  // we are advertising both services
+  // we are advertising all services
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->addServiceUUID(BATTERY_SERVICE_UUID);
   pAdvertising->addServiceUUID(CUSTOM_SERVICE_UUID);
 
   pAdvertising->setScanResponse(true);
@@ -598,6 +640,26 @@ void loop() {
       Serial.print(smokeVolt);
       Serial.print(",H2:");
       Serial.println(h2Volt);
+    }
+
+    // Read battery percentage if present
+    if (batteryMonitorPresent && batteryLevelCharacteristic != NULL) {
+      float batteryVoltage = batteryMonitor.cellVoltage();
+      float batteryPercentRaw = batteryMonitor.cellPercent();
+
+      uint8_t batteryPercent =
+          (uint8_t)constrain(batteryPercentRaw, 0.0f, 100.0f);
+
+      batteryLevelCharacteristic->setValue(&batteryPercent, sizeof(batteryPercent));
+      batteryLevelCharacteristic->notify();
+
+      Serial.print("Battery voltage: ");
+      Serial.print(batteryVoltage, 3);
+      Serial.print(" V | Raw percent: ");
+      Serial.print(batteryPercentRaw, 1);
+      Serial.print("% | BLE percent: ");
+      Serial.print(batteryPercent);
+      Serial.println("%");
     }
 
     // Read from BME680 sensor if present
