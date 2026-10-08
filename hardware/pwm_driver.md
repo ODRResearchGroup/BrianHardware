@@ -42,7 +42,7 @@
 ## 4. Low-Side Driver Specifications
 
 - **Primary Topology:** Low-Side Switching (Safe for purely resistive heating elements; avoids ground-lifting risks inherent to IMUs/data-carrying sensors).
-- **Recommended Driver IC:** Toshiba TBD62083APG (8-Channel DMOS FET Array).
+- **Recommended Driver IC:** Toshiba TBD62083APG (8-Channel DMOS FET Array). **Package update (2026-07-14):** use the SSOP variant, **TBD62083AFNG**, instead — the through-hole PDIP above doesn't fit a reflow-assembled board. See [pcb_layout_feedback_2026-07-14.md](pcb_layout_feedback_2026-07-14.md#12-dmos-driver-package-pdip--ssop-tbd62083a).
   - **Voltage Drop:** Highly efficient, calculated at ~18 mV (0.018V) per channel at 15 mA load.
   - **Power Dissipation:** Near-zero, calculated at ~0.27 mW wasted per active channel.
   - **Supply Requirements:** Completely passive power architecture. Requires no auxiliary high-voltage rails; derives gate drive directly from the RP2040 logic levels.
