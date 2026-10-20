@@ -7,7 +7,7 @@ BRIAN 2.0 is a 14-sensor electronic nose designed for discriminating volatile or
 - **Expanded sensor array** using a curated mix of Winsen GM-x02B/x12B and IDM/Huiwen SMD10xx MEMS resistive hot-plate sensors
 - **Controllable sensor heating** with per-sensor MOSFET switching to enable temperature modulation — cycling each heater through a set-point sequence during a measurement to extract richer discriminating information
 - **Improved ADC** with higher resolution and gain for better signal quality
-- **Direct ESP32 integration** on the PCB rather than via a daughterboard
+- **Direct on-board MCU integration** — ESP32-S3 host + RP2040 PWM co-processor mounted on the PCB, rather than a detachable controller/daughterboard
 
 ---
 
@@ -53,7 +53,11 @@ Datasheets for all proposed sensors are in `hardware/sensors/`.
 
 ## Heater Power Architecture
 
-**Decision:** Two shared DC-DC buck converters (one per voltage rail) with individual N-channel MOSFETs per sensor.
+**Decision:** Two shared DC-DC buck converters (one per voltage rail) with individual low-side switching per sensor.
+
+> **Update:** per-sensor switching is now implemented with **2× Toshiba TBD62083APG** 8-channel DMOS low-side driver arrays (14 of 16 channels used), driven directly from the RP2040 PWM co-processor, rather than discrete N-channel MOSFETs. This is a passive, low-side topology safe for the purely-resistive heaters and needs no auxiliary gate-drive rail. Full rationale in [pwm_driver.md](pwm_driver.md). The discrete-MOSFET selection criteria below are retained for reference.
+>
+> **Package update (2026-07-14):** switch to the **SSOP package variant, TBD62083AFNG**, in place of the through-hole PDIP `...APG` above — see [pcb_layout_feedback_2026-07-14.md](pcb_layout_feedback_2026-07-14.md#12-dmos-driver-package-pdip--ssop-tbd62083a).
 
 ### Why two voltage rails
 
@@ -127,50 +131,57 @@ PWM frequency should exceed 10 kHz to minimise temperature ripple relative to th
 
 ## Signal Readout Architecture
 
-**Decision:** Hybrid B — buffer-first MUX with passive RC anti-aliasing, no active LPF. Full rationale in [sensor_output_architecture.md](sensor_output_architecture.md).
+**Decision:** Per-sensor unity buffer + passive RC anti-aliasing → multichannel ΔΣ ADC, **no MUX**, no active LPF. Full rationale in [sensor_output_architecture.md](sensor_output_architecture.md).
 
-A 16:1 analog MUX centralises readout to a single ADC channel. A unity-gain buffer close to each sensor converts its high-impedance output to ~100 Ω before the signal travels to the MUX:
+A unity-gain buffer close to each sensor converts its high-impedance output (up to ~100 kΩ in clean air) to ~100 Ω before routing; a single-pole passive RC then feeds one dedicated ΔΣ ADC channel per sensor:
 
 ```
 Each sensor → unity buffer (RRIO CMOS, <10 pA Ib, SOT-23-8 dual)
-           → [low-Z routed trace] → 16:1 MUX → passive RC (1 kΩ + 100 nF) → ADC
+           → passive RC (≈10 kΩ + 10 nF, f_c ≈ 1.6 kHz)
+           → [dedicated channel on multichannel ΔΣ ADC]
 ```
 
-No active LPF is needed: the ADS122C14's delta-sigma filter provides >100 dB rejection of heater PWM frequencies at 20 SPS, and the heater supply LC post-filter already suppresses V_H ripple to sub-millivolt levels. The passive RC acts only as an anti-aliasing filter (f_c ≈ 1.3 kHz) to protect the ADC during MUX switching.
+The buffer is unity-gain by default but includes unpopulated R_f / R_g pads and a cuttable trace jumper, so each channel can be reconfigured as an inverting/non-inverting amplifier during prototyping without a respin.
 
-This replaces the original 28-op-amp fully-distributed design with 14 buffers + 1 MUX + passive RC, saving ~$6.45/board and ~111 mm² of PCB area. The seventh dual op-amp package has a spare channel reserved for an active LPF if prototyping shows it is needed.
+> **Part update (2026-07-14):** buffer op-amp switches to **TI TLV9152** in the **SOT-23-THN** package, in place of the OPA2334/TLV2372 SOT-23-8 recommendation below — see [pcb_layout_feedback_2026-07-14.md](pcb_layout_feedback_2026-07-14.md#11-buffer-op-amp-tlv2372--tlv9152-sot-23-thn). Note the footprint change (SOT-23-THN ≠ SOT-23-8).
 
-The MUX-first variant (no per-sensor buffers) was evaluated and rejected: sensor source impedance of up to 100 kΩ in combination with the board's switching noise environment would produce ~100–200 mV of coupled noise on sensor traces, negating the 24-bit ADC resolution entirely.
+**Why no MUX (supersedes Hybrid B):** once the active LPF is removed, a MUX saves no op-amps — one buffer per sensor is the floor regardless — while introducing charge-injection and switching noise directly into millivolt signals and imposing per-channel RC settling that penalises scan speed. A multichannel ΔΣ ADC reads every channel with no switching overhead. The earlier Hybrid B design (buffer → 16:1 MUX → single ADC) is archived at [hardware/archive/26F26_sensor_output_mux_decision.md](archive/26F26_sensor_output_mux_decision.md).
+
+No active LPF is needed: the ΔΣ ADC's internal Sinc filter enforces the band limit with no component drift, and the heater-supply LC post-filter suppresses V_H ripple upstream. The passive RC provides ~14–20 dB of analog attenuation at the 10 kHz PWM frequency and protects the ADC input.
 
 ### Key parameters
 
-| Parameter                                        | Value                                                               |
-| ------------------------------------------------ | ------------------------------------------------------------------- |
-| Buffer op-amp                                    | RRIO CMOS dual, Ib < 10 pA, Vos < 1 mV (e.g. OPA2334, TLV2372)      |
-| MUX                                              | 16:1 analog, Ron < 200 Ω, leakage < 15 nA (e.g. TMUX16116, ADG1607) |
-| Anti-aliasing filter                             | 1 kΩ + 100 nF passive RC, f_c ≈ 1.3 kHz, ~2 ms settling             |
-| ADC channels required                            | 1 (vs. 14 in fully-distributed design)                              |
-| Full scan time (4 temperature steps, Strategy B) | ~2.8 s at 90 SPS / 4 averages                                       |
+| Parameter                                        | Value                                                          |
+| ------------------------------------------------ | -------------------------------------------------------------- |
+| Buffer op-amp                                    | RRIO CMOS dual, Ib < 10 pA, Vos < 1 mV (e.g. OPA2334, TLV2372) |
+| Anti-aliasing filter                             | ≈10 kΩ + 10 nF passive RC, f_c ≈ 1.6 kHz                       |
+| ADC                                              | 2× ADS131M08 (16 ch total, 14 used) — see ADC section          |
+| ADC channels required                            | 14 (one per sensor, no MUX)                                    |
+| Full scan time (4 temperature steps, Strategy B) | ~345 ms                                                        |
 
 ## ADC
 
-**Selected:** [TI ADS122C14](https://www.ti.com/product/ADS122C14) — 4 analog inputs, 24-bit, programmable gain up to 128, I²C interface. One device is sufficient with the MUX architecture (single active channel).
+**Selected:** 2× [TI ADS131M08](https://www.ti.com/product/ADS131M08) — 8-channel, 24-bit ΔΣ, simultaneous-sampling, built-in PGA (1–128×), SPI, single 3.3 V supply. Two devices give 16 channels (14 used + 2 spare), sharing SCLK/MOSI/MISO with separate /CS lines. Note: the ADS131M08 has no internal oscillator — it requires an external CLKIN (≈8.192 MHz), ideally shared between both devices for synchronised sampling.
 
-~~Analog Devices LTC2499 (24-bit 16-channel ADC) — superseded by ADS122C14 selection.~~
+~~TI ADS122C14 (4-ch, I²C) — superseded; it assumed a single-channel MUX front end that has since been dropped (see Signal Readout Architecture).~~
+~~Analog Devices LTC2499 (24-bit 16-channel ADC) — superseded.~~
+
+Full ADC rationale and part comparison (ADS131M08 vs. ADS1258 vs. MCP3914): [sensor_output_architecture.md](sensor_output_architecture.md).
 
 ---
 
 ## Controller
 
-**Selected:** Original ESP32 (e.g. ESP32-WROOM-32), mounted directly on the PCB, replacing the detachable controller board used in BRIAN 1.x.
+**Selected:** dual-MCU architecture, both mounted directly on the PCB, replacing the detachable controller board used in BRIAN 1.x:
 
-The key constraint is **PWM channel count**. Each of the 14 sensors requires an independent hardware PWM signal (>10 kHz) to its MOSFET gate for temperature modulation. The original ESP32's LEDC peripheral provides **16 independent hardware PWM channels** — the only ESP32 variant with enough. All newer variants (S2, S3, C3, C6, H2, P4) have 8 or fewer LEDC channels.
+- **Host — ESP32-S3-WROOM-1:** high-level logic, BLE/WiFi radios, sensor-data ingestion, ADC readout (SPI), and the I²C bus (BME680, fuel gauge). Native USB — no external USB-UART bridge required.
+- **PWM co-processor — RP2040 (QFN-56):** generates all 14 heater PWM signals, offloading high-frequency PWM from the host. Its own native USB and W25Q32 flash are on-board; the host programs/controls it over SWD plus a UART and an SPI link.
 
-External PWM ICs were evaluated and all rejected: constant-current LED drivers (PCA9955BTW, TLC59711) have the wrong output type; the PCA9685 is voltage-mode but tops out at ~1,526 Hz; the SX1509 reaches ~7.8 kHz (just under the 10 kHz threshold); the CY8C9520A can exceed 10 kHz but only has 4 PWM blocks. No single external IC satisfies all three requirements simultaneously (≥14 channels, ≥10 kHz, voltage-mode outputs).
+The driving constraint remains **PWM channel count**: each of the 14 sensors needs an independent hardware PWM (≥10 kHz) to its low-side driver for temperature modulation. The RP2040 provides **16 independent hardware PWM channels** (8 slices × 2), meeting the requirement with margin (expandable via PIO). This decouples the PWM requirement from the host-MCU choice, freeing the host selection to prioritise radios and USB — hence the ESP32-S3.
 
-Because the original ESP32 lacks native USB, a **CP2102N** USB-to-UART bridge is included on the PCB for programming and debug. BRIAN's primary data paths (BLE for the mobile app, WiFi for the web interface) are unaffected.
+> **Note (superseded approach):** an earlier plan used a single *classic* ESP32 (16 LEDC channels) for both host and PWM duty, with a **CP2102N** USB-UART bridge because it lacks native USB. That is replaced by the ESP32-S3 + RP2040 split above: the RP2040 handles PWM, and native USB on both parts removes the CP2102N. External dedicated PWM ICs were also evaluated and rejected (PCA9685 tops out ~1.5 kHz; SX1509 ~7.8 kHz; CY8C9520A only 4 blocks; LED drivers have the wrong output type).
 
-Full decision rationale, ESP32 family comparison, rejected alternatives, and Arduino LEDC implementation notes: [pwm_driver.md](pwm_driver.md)
+Full decision rationale, MCU/PWM comparison, driver-array (TBD62083APG) selection, and inter-chip interface details: [pwm_driver.md](pwm_driver.md)
 
 ---
 

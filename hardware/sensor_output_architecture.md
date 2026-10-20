@@ -238,6 +238,8 @@ Even careful PCB layout cannot reduce C_couple below ~0.01 pF between adjacent s
 
 Suitable parts: OPA2334 (25 µV offset, 1 pA Ib, dual SOT-23-8), TLV2372 (0.5 mV offset, 1 pA Ib, dual SOT-23-8).
 
+> **Part update (2026-07-14):** selected part is now **TLV9152** in the **SOT-23-THN** package (not SOT-23-8) — see [pcb_layout_feedback_2026-07-14.md](pcb_layout_feedback_2026-07-14.md#11-buffer-op-amp-tlv2372--tlv9152-sot-23-thn).
+
 ---
 
 ## Why No Active LPF
