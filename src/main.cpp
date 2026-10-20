@@ -85,6 +85,10 @@ BLECharacteristic *altitudeCharacteristic = NULL;
 // Battery level characteristic
 BLECharacteristic *batteryLevelCharacteristic = NULL;
 
+// Estimated battery runtime in hours
+BLECharacteristic *batteryRuntimeCharacteristic = NULL;
+
+
 // Time synchronization characteristic
 BLECharacteristic *timeSyncCharacteristic = NULL;
 
@@ -128,6 +132,46 @@ bool bme680_present = false;
 // Battery fuel gauge
 Adafruit_LC709203F batteryMonitor;
 bool batteryMonitorPresent = false;
+
+// ============================================================
+// Battery runtime estimation
+// ============================================================
+
+constexpr float BATTERY_CAPACITY_MAH = 800.0f;
+
+// Measured real-world runtime:
+// approximately 7 hours from 100% to ~2-3%.
+constexpr float FALLBACK_RUNTIME_HOURS = 7.0f;
+
+// Don't update the discharge estimate too frequently.
+// 30 seconds gives us enough time between measurements.
+constexpr unsigned long BATTERY_SAMPLE_INTERVAL_MS = 30000;
+
+// Require this much battery percentage change before considering
+// a new discharge-rate measurement useful.
+constexpr float MIN_PERCENT_CHANGE = 0.10f;
+
+// Exponential smoothing factor.
+// Lower = smoother/more stable, higher = reacts faster.
+constexpr float DISCHARGE_SMOOTHING = 0.15f;
+
+// Prevent ridiculous estimates caused by a temporarily flat
+// battery percentage reading.
+constexpr float MIN_DISCHARGE_RATE_PERCENT_PER_HOUR = 1.0f;
+constexpr float MAX_DISCHARGE_RATE_PERCENT_PER_HOUR = 50.0f;
+
+float lastBatteryPercent = NAN;
+unsigned long lastBatterySampleTime = 0;
+
+// Smoothed battery consumption in percent/hour.
+float smoothedDischargeRate = NAN;
+
+// Current runtime estimate in hours.
+float estimatedBatteryHours = FALLBACK_RUNTIME_HOURS;
+
+// Whether we've managed to establish a real-world discharge estimate.
+bool batteryEstimateEstablished = false;
+
 
 
 // Initialize BME680 sensor and detect if present
@@ -243,6 +287,120 @@ class MyServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
 };
 
+// ============================================================
+// Update battery runtime estimate
+// ============================================================
+
+void updateBatteryRuntimeEstimate(float batteryPercent) {
+
+  unsigned long now = millis();
+
+  // ------------------------------------------------------------
+  // Fallback estimate
+  //
+  // Measured runtime is approximately 7 hours from 100% to 0%.
+  // Therefore, before we have enough real-world discharge data,
+  // estimate remaining runtime proportionally:
+  //
+  //   100% -> 7.00 hours
+  //    65% -> 4.55 hours
+  //    50% -> 3.50 hours
+  //     0% -> 0.00 hours
+  // ------------------------------------------------------------
+  if (!batteryEstimateEstablished) {
+    estimatedBatteryHours =
+        (batteryPercent / 100.0f) * FALLBACK_RUNTIME_HOURS;
+
+    // Don't allow negative values.
+    if (estimatedBatteryHours < 0.0f) {
+      estimatedBatteryHours = 0.0f;
+    }
+
+    // Don't allow values above the 100% fallback runtime.
+    if (estimatedBatteryHours > FALLBACK_RUNTIME_HOURS) {
+      estimatedBatteryHours = FALLBACK_RUNTIME_HOURS;
+    }
+  }
+
+  // First reading
+  if (isnan(lastBatteryPercent)) {
+    lastBatteryPercent = batteryPercent;
+    lastBatterySampleTime = now;
+    return;
+  }
+
+  // Don't sample more often than the configured interval.
+  if ((now - lastBatterySampleTime) < BATTERY_SAMPLE_INTERVAL_MS) {
+    return;
+  }
+
+  float elapsedHours =
+      (now - lastBatterySampleTime) / 3600000.0f;
+
+  float percentChange =
+      lastBatteryPercent - batteryPercent;
+
+  // Update the stored sample even if there wasn't enough
+  // battery movement to calculate a useful rate.
+  lastBatteryPercent = batteryPercent;
+  lastBatterySampleTime = now;
+
+  // Battery percentage increased.
+  // This can happen because the LC709203 fuel gauge recalculates
+  // its estimate. Don't interpret this as negative consumption.
+  if (percentChange <= MIN_PERCENT_CHANGE) {
+    return;
+  }
+
+  // Calculate instantaneous discharge rate.
+  float dischargeRate =
+      percentChange / elapsedHours;
+
+  // Reject clearly unrealistic readings.
+  if (dischargeRate < MIN_DISCHARGE_RATE_PERCENT_PER_HOUR ||
+      dischargeRate > MAX_DISCHARGE_RATE_PERCENT_PER_HOUR) {
+    return;
+  }
+
+  // Establish the initial rate.
+  if (isnan(smoothedDischargeRate)) {
+
+    smoothedDischargeRate = dischargeRate;
+    batteryEstimateEstablished = true;
+
+  } else {
+
+    // Exponential moving average.
+    smoothedDischargeRate =
+        (smoothedDischargeRate * (1.0f - DISCHARGE_SMOOTHING)) +
+        (dischargeRate * DISCHARGE_SMOOTHING);
+  }
+
+  // ------------------------------------------------------------
+  // Measured runtime calculation.
+  //
+  // This section is unchanged from the original code.
+  // Once a real-world discharge rate has been established,
+  // use that measured rate instead of the fallback estimate.
+  // ------------------------------------------------------------
+  if (smoothedDischargeRate > 0.0f) {
+
+    estimatedBatteryHours =
+        batteryPercent / smoothedDischargeRate;
+
+    // Don't report negative values.
+    if (estimatedBatteryHours < 0.0f) {
+      estimatedBatteryHours = 0.0f;
+    }
+
+    // Don't allow a single bad calculation to produce
+    // an absurdly long runtime.
+    if (estimatedBatteryHours > FALLBACK_RUNTIME_HOURS * 1.5f) {
+      estimatedBatteryHours = FALLBACK_RUNTIME_HOURS * 1.5f;
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -268,9 +426,14 @@ void setup() {
     batteryMonitorPresent = true;
     Serial.println("Found LC709203F battery monitor");
     batteryMonitor.setAlarmVoltage(3.8f);
-    // Pack size is configured by the part being used. The 4400 mAh pack is
-    // closest to the 3000 mAh profile supported by the LC709203F library.
-    batteryMonitor.setPackSize(LC709203F_APA_3000MAH);
+
+    // The actual battery is 800 mAh.
+    // The LC709203F library uses predefined battery profiles rather
+    // than allowing an arbitrary capacity to be entered here.
+    //
+    // We use the known 800 mAh capacity for our runtime calculation.
+    batteryMonitor.setPackSize(LC709203F_APA_1000MAH);
+
   } else {
     Serial.println("LC709203F not found or no battery connected");
   }
@@ -310,6 +473,15 @@ void setup() {
       BLEUUID((uint16_t)0x2A19),
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
   setupCCCDDescriptor(batteryLevelCharacteristic);
+
+  // Battery runtime estimate.
+  // Value is a 32-bit float containing hours remaining.
+  batteryRuntimeCharacteristic = customService->createCharacteristic(
+      BLEUUID("d5e4f3a2-b1c0-4d9e-8f7a-6b5c4d3e2f10"),
+      BLECharacteristic::PROPERTY_READ |
+      BLECharacteristic::PROPERTY_NOTIFY);
+
+  setupCCCDDescriptor(batteryRuntimeCharacteristic);
 
   // these are for ESS standardised characteristics
   // Taken partially from
@@ -571,25 +743,91 @@ void loop() {
       Serial.println(h2Volt);
     }
 
-    // Read battery percentage if present
+    // ============================================================
+    // Read battery percentage and estimate remaining runtime
+    // ============================================================
+
     if (batteryMonitorPresent && batteryLevelCharacteristic != NULL) {
+
       float batteryVoltage = batteryMonitor.cellVoltage();
       float batteryPercentRaw = batteryMonitor.cellPercent();
 
-      uint8_t batteryPercent =
-          (uint8_t)constrain(batteryPercentRaw, 0.0f, 100.0f);
+      // Make sure the fuel gauge returned a sensible value.
+      bool validBatteryReading =
+          !isnan(batteryPercentRaw) &&
+          batteryPercentRaw >= 0.0f &&
+          batteryPercentRaw <= 100.0f;
 
-      batteryLevelCharacteristic->setValue(&batteryPercent, sizeof(batteryPercent));
-      batteryLevelCharacteristic->notify();
+      if (validBatteryReading) {
 
-      Serial.print("Battery voltage: ");
-      Serial.print(batteryVoltage, 3);
-      Serial.print(" V | Raw percent: ");
-      Serial.print(batteryPercentRaw, 1);
-      Serial.print("% | BLE percent: ");
-      Serial.print(batteryPercent);
-      Serial.println("%");
+        uint8_t batteryPercent =
+            (uint8_t)constrain(batteryPercentRaw, 0.0f, 100.0f);
+
+        // Send battery percentage over BLE.
+        batteryLevelCharacteristic->setValue(
+            &batteryPercent,
+            sizeof(batteryPercent));
+
+        batteryLevelCharacteristic->notify();
+
+        // Update runtime estimate.
+        updateBatteryRuntimeEstimate(batteryPercentRaw);
+
+        // Send runtime estimate over BLE as float (hours).
+        if (batteryRuntimeCharacteristic != NULL) {
+
+          float runtime = estimatedBatteryHours;
+
+          batteryRuntimeCharacteristic->setValue(
+              (uint8_t *)&runtime,
+              sizeof(runtime));
+
+          batteryRuntimeCharacteristic->notify();
+        }
+
+        // Serial debugging
+        Serial.print("Battery voltage: ");
+        Serial.print(batteryVoltage, 3);
+
+        Serial.print(" V | Battery: ");
+        Serial.print(batteryPercentRaw, 1);
+        Serial.print("%");
+
+        Serial.print(" | Runtime: ");
+
+        if (batteryEstimateEstablished) {
+          Serial.print(estimatedBatteryHours, 2);
+          Serial.print(" h");
+          Serial.print(" | Discharge rate: ");
+          Serial.print(smoothedDischargeRate, 2);
+          Serial.print("%/h");
+        } else {
+          Serial.print(estimatedBatteryHours, 2);
+          Serial.print(" h (fallback)");
+        }
+
+        Serial.println();
+
+      } else {
+
+        // Fuel gauge failed to provide a valid reading.
+        // Continue reporting the fallback/last known runtime.
+        Serial.println(
+            "Battery reading invalid - using previous runtime estimate");
+
+        if (batteryRuntimeCharacteristic != NULL) {
+
+          float runtime = estimatedBatteryHours;
+
+          batteryRuntimeCharacteristic->setValue(
+              (uint8_t *)&runtime,
+              sizeof(runtime));
+
+          batteryRuntimeCharacteristic->notify();
+        }
+      }
     }
+
 
     // Read from BME680 sensor if present
     if (bme680_present) {
