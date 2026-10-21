@@ -116,6 +116,15 @@ See the hardware docs in [`hardware/`](./hardware):
 - Device name: `BRIAN`
 - Standard service: Environmental Sensing Service (`0x181A`)
 - Custom service: `de664a17-7db4-449f-97ba-5514e19a9d94`
+- Aggregate sensor data characteristic (notify, custom service):
+  `9f4c8f2b-5e0a-4b8e-9f0d-6d9a1c2e7b34` — one JSON payload every 5 seconds.
+  The payload is a flat object whose sensor keys match the client sensor
+  definitions exactly: `CH4`, `NO2`, `VOC`, `NH3`, `HCHO`, `Odour`, `Etoh`,
+  `H2S`, `CO`, `Smoke`, `H2`, `TempC`, `PressureHPa`, `HumidityPct`,
+  `AltitudeM`, and `GasResOhm`. Gas values are in volts; environmental values
+  use the units listed by the client. Only sensors detected at boot are
+  included. The payload also contains `battery` (voltage and percentage when
+  available), `board_status`, and `timestamp` (Unix seconds).
 - Time sync characteristic (write): `a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d`
 - Board status characteristic (read, custom service): `407fd299-d6ed-45ed-ab21-437f101c8acd` — 1-byte bitmask, bit 0/1/2 = ADS1/ADS2/ADS3 detected, bit 3 = BME680 detected, captured once at boot
 
