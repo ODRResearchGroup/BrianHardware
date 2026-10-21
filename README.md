@@ -80,24 +80,6 @@ pio run
 pio run -t upload
 ```
 
-### Sensor-free Xiao ESP32-C3 mock mode
-
-The optional `XIAO_ESP32C3_MOCK` environment builds the firmware for a Seeed
-Xiao ESP32-C3 without any gas sensors, BME680, or battery monitor connected:
-
-```bash
-pio run -e XIAO_ESP32C3_MOCK -t upload
-pio device monitor -b 115200
-```
-
-This mode creates the same BLE services, UUIDs, characteristics, JSON payload,
-notifications, time synchronization, and board-status response as a fully
-populated device. It reports changing mock values for every gas and
-environmental channel plus a simulated battery reading, so the existing app
-and web viewer can be tested unchanged. It is enabled only by
-`-DBRIAN_MOCK_SENSORS=1` in the dedicated PlatformIO environment; the default
-`MicroMod_ESP32` environment continues to probe and read real hardware.
-
 ### Open Serial Monitor
 
 ```bash

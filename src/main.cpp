@@ -37,13 +37,8 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <esp_mac.h>
-#include <math.h>
 #include <string>
 #include <sys/time.h>
-
-#ifndef BRIAN_MOCK_SENSORS
-#define BRIAN_MOCK_SENSORS 0
-#endif
 
 BLEServer *pServer = NULL;
 BLESecurity *pSecurity = NULL;
@@ -151,19 +146,8 @@ Board *getBoard(uint8_t board_num) {
 }
 
 bool boardAvailable(uint8_t board_num) {
-  return BRIAN_MOCK_SENSORS || getBoard(board_num)->present;
+  return getBoard(board_num)->present;
 }
-
-#if BRIAN_MOCK_SENSORS
-// Deterministic, slowly varying signals make mock data easier to recognize
-// while avoiding the unrealistic one-second sawtooth used previously.
-float mockWave(float base, float amplitude, float periodSeconds,
-               float phase = 0.0f) {
-  const float seconds = millis() / 1000.0f;
-  constexpr float twoPi = 6.28318530718f;
-  return base + amplitude * sinf(twoPi * seconds / periodSeconds + phase);
-}
-#endif
 
 // BME680 environmental sensor
 Adafruit_BME680 bme680;
@@ -175,12 +159,6 @@ bool batteryMonitorPresent = false;
 
 // Initialize BME680 sensor and detect if present
 void initBME680() {
-#if BRIAN_MOCK_SENSORS
-  bme680_present = true;
-  Serial.println("Mock mode: using simulated BME680 values");
-  return;
-#endif
-
   if (!bme680.begin(0x77)) // Default I2C address
   {
     if (!bme680.begin(0x76)) // Alternative I2C address
@@ -204,14 +182,6 @@ void initBME680() {
 // Here is a function to initialize the MEMS sensor and detect which boards are
 // present
 void initMEMS() {
-#if BRIAN_MOCK_SENSORS
-  for (size_t i = 0; i < boardCount; i++) {
-    boards[i].present = true;
-  }
-  Serial.println("Mock mode: using simulated ADS1115 values");
-  return;
-#endif
-
   for (size_t i = 0; i < boardCount; i++) {
     if (boards[i].ads.begin(boards[i].i2c_address)) {
       boards[i].present = true;
@@ -256,12 +226,6 @@ void initMEMS() {
 // the reported voltage is clipped, so a warning is logged.
 float readChannelVolts(Board *board, uint8_t channel, adsGain_t gain,
                        adsGain_t defaultGain, const char *label) {
-#if BRIAN_MOCK_SENSORS
-  const uint8_t boardIndex = board - boards;
-  const float phase = static_cast<float>(boardIndex * 4 + channel) * 0.7f;
-  const float base = 0.30f + 0.015f * (boardIndex * 4 + channel);
-  return mockWave(base, 0.012f, 120.0f, phase);
-#else
   board->ads.setGain(gain);
   int16_t raw = board->ads.readADC_SingleEnded(channel);
   // Convert while the reading's gain is still set.
@@ -278,7 +242,6 @@ float readChannelVolts(Board *board, uint8_t channel, adsGain_t gain,
         " reading at full scale - value clipped, reduce gain / range");
   }
   return volts;
-#endif
 }
 
 // Helper function to add BLE2902 descriptor for notifications
@@ -347,11 +310,6 @@ class MyServerCallbacks : public BLEServerCallbacks {
 void setup() {
   Serial.begin(115200);
 
-#if BRIAN_MOCK_SENSORS
-  // Give a serial monitor time to attach before startup diagnostics are sent.
-  delay(2000);
-#endif
-
   // The ADS1115/BME680 probes need the I2C bus to be initialized first.
   Wire.begin();
   Wire.setClock(400000);
@@ -370,10 +328,6 @@ void setup() {
   initMEMS();
   initBME680();
 
-#if BRIAN_MOCK_SENSORS
-  batteryMonitorPresent = true;
-  Serial.println("Mock mode: using simulated battery values");
-#else
   if (batteryMonitor.begin()) {
     batteryMonitorPresent = true;
     Serial.println("Found LC709203F battery monitor");
@@ -384,7 +338,6 @@ void setup() {
   } else {
     Serial.println("LC709203F not found or no battery connected");
   }
-#endif
 
   // Create the BLE Device
   uint8_t bluetoothMac[6];
@@ -708,13 +661,8 @@ void loop() {
 
     // Read battery percentage if present
     if (batteryMonitorPresent && batteryLevelCharacteristic != NULL) {
-#if BRIAN_MOCK_SENSORS
-      const float batteryVoltage = mockWave(3.95f, 0.01f, 600.0f);
-      const float batteryPercentRaw = mockWave(82.0f, 0.4f, 600.0f);
-#else
       const float batteryVoltage = batteryMonitor.cellVoltage();
       const float batteryPercentRaw = batteryMonitor.cellPercent();
-#endif
 
       uint8_t batteryPercent =
           (uint8_t)constrain(batteryPercentRaw, 0.0f, 100.0f);
@@ -742,14 +690,6 @@ void loop() {
       float humidity = 0.0f;
       float gas = 0.0f;
       float altitude = 0.0f;
-#if BRIAN_MOCK_SENSORS
-      temperature = mockWave(21.5f, 0.3f, 180.0f);
-      pressure = mockWave(1013.25f, 1.2f, 240.0f, 1.0f);
-      humidity = mockWave(45.0f, 1.5f, 210.0f, 2.0f);
-      gas = mockWave(12000.0f, 500.0f, 300.0f, 0.5f);
-      altitude = 0.0f;
-      bmeReadingAvailable = true;
-#else
       if (bme680.performReading()) {
         temperature = bme680.temperature;
         pressure = bme680.pressure / 100.0f;
@@ -758,7 +698,6 @@ void loop() {
         altitude = bme680.readAltitude(1013.25);
         bmeReadingAvailable = true;
       }
-#endif
       if (bmeReadingAvailable) {
         // Read temperature
         if (temperatureCharacteristic != NULL) {
