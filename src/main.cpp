@@ -32,11 +32,18 @@
 #include <Adafruit_ADS1X15.h>
 #include <Adafruit_BME680.h>
 #include <Adafruit_LC709203F.h>
+#include <ArduinoJson.h>
 #include <SD.h>
 #include <SPI.h>
 #include <Wire.h>
 #include <esp_mac.h>
+#include <math.h>
+#include <string>
 #include <sys/time.h>
+
+#ifndef BRIAN_MOCK_SENSORS
+#define BRIAN_MOCK_SENSORS 0
+#endif
 
 BLEServer *pServer = NULL;
 BLESecurity *pSecurity = NULL;
@@ -88,12 +95,16 @@ BLECharacteristic *batteryLevelCharacteristic = NULL;
 // Time synchronization characteristic
 BLECharacteristic *timeSyncCharacteristic = NULL;
 
+// Aggregate JSON sensor readings characteristic
+#define SENSOR_DATA_JSON_CHARACTERISTIC_UUID                                   \
+  "9f4c8f2b-5e0a-4b8e-9f0d-6d9a1c2e7b34"
+BLECharacteristic *sensorDataJsonCharacteristic = NULL;
+
 // Board status characteristic: reports which I2C boards were detected at
 // boot, independent of whether any per-sensor characteristics exist for them.
 // Always created (unlike the sensor characteristics above), so clients can
 // show hardware health even for a board that is entirely missing.
-#define BOARD_STATUS_CHARACTERISTIC_UUID                                      \
-  "407fd299-d6ed-45ed-ab21-437f101c8acd"
+#define BOARD_STATUS_CHARACTERISTIC_UUID "407fd299-d6ed-45ed-ab21-437f101c8acd"
 BLECharacteristic *boardStatusCharacteristic = NULL;
 
 // Bit layout of the board status byte. Status is captured once at boot
@@ -139,6 +150,21 @@ Board *getBoard(uint8_t board_num) {
   return NULL;
 }
 
+bool boardAvailable(uint8_t board_num) {
+  return BRIAN_MOCK_SENSORS || getBoard(board_num)->present;
+}
+
+#if BRIAN_MOCK_SENSORS
+// Deterministic, slowly varying signals make mock data easier to recognize
+// while avoiding the unrealistic one-second sawtooth used previously.
+float mockWave(float base, float amplitude, float periodSeconds,
+               float phase = 0.0f) {
+  const float seconds = millis() / 1000.0f;
+  constexpr float twoPi = 6.28318530718f;
+  return base + amplitude * sinf(twoPi * seconds / periodSeconds + phase);
+}
+#endif
+
 // BME680 environmental sensor
 Adafruit_BME680 bme680;
 bool bme680_present = false;
@@ -147,9 +173,14 @@ bool bme680_present = false;
 Adafruit_LC709203F batteryMonitor;
 bool batteryMonitorPresent = false;
 
-
 // Initialize BME680 sensor and detect if present
 void initBME680() {
+#if BRIAN_MOCK_SENSORS
+  bme680_present = true;
+  Serial.println("Mock mode: using simulated BME680 values");
+  return;
+#endif
+
   if (!bme680.begin(0x77)) // Default I2C address
   {
     if (!bme680.begin(0x76)) // Alternative I2C address
@@ -173,6 +204,14 @@ void initBME680() {
 // Here is a function to initialize the MEMS sensor and detect which boards are
 // present
 void initMEMS() {
+#if BRIAN_MOCK_SENSORS
+  for (size_t i = 0; i < boardCount; i++) {
+    boards[i].present = true;
+  }
+  Serial.println("Mock mode: using simulated ADS1115 values");
+  return;
+#endif
+
   for (size_t i = 0; i < boardCount; i++) {
     if (boards[i].ads.begin(boards[i].i2c_address)) {
       boards[i].present = true;
@@ -217,6 +256,12 @@ void initMEMS() {
 // the reported voltage is clipped, so a warning is logged.
 float readChannelVolts(Board *board, uint8_t channel, adsGain_t gain,
                        adsGain_t defaultGain, const char *label) {
+#if BRIAN_MOCK_SENSORS
+  const uint8_t boardIndex = board - boards;
+  const float phase = static_cast<float>(boardIndex * 4 + channel) * 0.7f;
+  const float base = 0.30f + 0.015f * (boardIndex * 4 + channel);
+  return mockWave(base, 0.012f, 120.0f, phase);
+#else
   board->ads.setGain(gain);
   int16_t raw = board->ads.readADC_SingleEnded(channel);
   // Convert while the reading's gain is still set.
@@ -233,6 +278,7 @@ float readChannelVolts(Board *board, uint8_t channel, adsGain_t gain,
         " reading at full scale - value clipped, reduce gain / range");
   }
   return volts;
+#endif
 }
 
 // Helper function to add BLE2902 descriptor for notifications
@@ -301,6 +347,11 @@ class MyServerCallbacks : public BLEServerCallbacks {
 void setup() {
   Serial.begin(115200);
 
+#if BRIAN_MOCK_SENSORS
+  // Give a serial monitor time to attach before startup diagnostics are sent.
+  delay(2000);
+#endif
+
   // The ADS1115/BME680 probes need the I2C bus to be initialized first.
   Wire.begin();
   Wire.setClock(400000);
@@ -308,17 +359,21 @@ void setup() {
   Serial.println("I2C scanner");
 
   for (uint8_t address = 1; address < 127; address++) {
-      Wire.beginTransmission(address);
-      uint8_t error = Wire.endTransmission();
-    
-      if (error == 0) {
-          Serial.printf("Found device at 0x%02X\n", address);
-      }
+    Wire.beginTransmission(address);
+    uint8_t error = Wire.endTransmission();
+
+    if (error == 0) {
+      Serial.printf("Found device at 0x%02X\n", address);
+    }
   }
 
   initMEMS();
   initBME680();
 
+#if BRIAN_MOCK_SENSORS
+  batteryMonitorPresent = true;
+  Serial.println("Mock mode: using simulated battery values");
+#else
   if (batteryMonitor.begin()) {
     batteryMonitorPresent = true;
     Serial.println("Found LC709203F battery monitor");
@@ -329,6 +384,7 @@ void setup() {
   } else {
     Serial.println("LC709203F not found or no battery connected");
   }
+#endif
 
   // Create the BLE Device
   uint8_t bluetoothMac[6];
@@ -369,7 +425,7 @@ void setup() {
   // these are for ESS standardised characteristics
   // Taken partially from
   // https://www.bluetooth.com/specifications/assigned-numbers/
-  if (getBoard(boardAds1)->present) {
+  if (boardAvailable(boardAds1)) {
     ch4Characteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2BD1),
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
@@ -393,7 +449,7 @@ void setup() {
     setupCCCDDescriptor(odorCharacteristic);
   }
 
-  if (getBoard(boardAds2)->present) {
+  if (boardAvailable(boardAds2)) {
 
     nh3Characteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2BCF),
@@ -417,9 +473,9 @@ void setup() {
   }
 
   Serial.print("BoardAds3 (0x4A) present flag: ");
-  Serial.println(getBoard(boardAds3)->present ? "TRUE" : "FALSE");
+  Serial.println(boardAvailable(boardAds3) ? "TRUE" : "FALSE");
 
-  if (getBoard(boardAds3)->present) {
+  if (boardAvailable(boardAds3)) {
     Serial.println("Creating CO, Smoke, H2 characteristics...");
     coCharacteristic = customService->createCharacteristic(
         BLEUUID("88f6fa6c-c4e0-4a3d-ba72-f435641251c4"),
@@ -488,18 +544,24 @@ void setup() {
   timeSyncCharacteristic->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   timeSyncCharacteristic->setCallbacks(new TimeSyncCallbacks());
 
+  // Aggregate readings are sent as one JSON notification every sampling cycle.
+  sensorDataJsonCharacteristic = customService->createCharacteristic(
+      BLEUUID(SENSOR_DATA_JSON_CHARACTERISTIC_UUID),
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  setupCCCDDescriptor(sensorDataJsonCharacteristic);
+
   // we are starting all services
   // Board status: always created, regardless of what was detected, so a
   // client can distinguish "board missing" from "characteristic not
   // discovered". Captured once here; never updated in loop().
   uint8_t boardStatus = 0;
-  if (getBoard(boardAds1)->present) {
+  if (boardAvailable(boardAds1)) {
     boardStatus |= (1 << BOARD_STATUS_ADS1_BIT);
   }
-  if (getBoard(boardAds2)->present) {
+  if (boardAvailable(boardAds2)) {
     boardStatus |= (1 << BOARD_STATUS_ADS2_BIT);
   }
-  if (getBoard(boardAds3)->present) {
+  if (boardAvailable(boardAds3)) {
     boardStatus |= (1 << BOARD_STATUS_ADS3_BIT);
   }
   if (bme680_present) {
@@ -531,8 +593,10 @@ void setup() {
 
 void loop() {
   if (deviceConnected) {
+    JsonDocument jsonDocument;
+
     // Read from board 0 (ADS1) sensors if present
-    if (getBoard(boardAds1)->present) {
+    if (boardAvailable(boardAds1)) {
       Board *board = getBoard(boardAds1);
 
       // Formaldehyde sensor
@@ -541,36 +605,36 @@ void loop() {
       // Send the voltage value as a 4-byte float over BLE
       if (hchoCharacteristic != NULL) {
         hchoCharacteristic->setValue((uint8_t *)&hchoVolt, sizeof(hchoVolt));
-        hchoCharacteristic->notify();
       }
+      jsonDocument["HCHO"] = hchoVolt;
 
       // CH4 sensor
       float ch4Volt = readChannelVolts(board, 1, GAIN_BOARD1_DEFAULT,
                                        GAIN_BOARD1_DEFAULT, "CH4");
       if (ch4Characteristic != NULL) {
         ch4Characteristic->setValue((uint8_t *)&ch4Volt, sizeof(ch4Volt));
-        ch4Characteristic->notify();
       }
+      jsonDocument["CH4"] = ch4Volt;
 
       // VOC sensor (read at a higher gain for its lower output range)
       float vocVolt =
           readChannelVolts(board, 2, GAIN_VOC, GAIN_BOARD1_DEFAULT, "VOC");
       if (vocCharacteristic != NULL) {
         vocCharacteristic->setValue((uint8_t *)&vocVolt, sizeof(vocVolt));
-        vocCharacteristic->notify();
       }
+      jsonDocument["VOC"] = vocVolt;
 
       // Odor sensor
       float odorVolt = readChannelVolts(board, 3, GAIN_BOARD1_DEFAULT,
                                         GAIN_BOARD1_DEFAULT, "Odor");
       if (odorCharacteristic != NULL) {
         odorCharacteristic->setValue((uint8_t *)&odorVolt, sizeof(odorVolt));
-        odorCharacteristic->notify();
       }
+      jsonDocument["Odour"] = odorVolt;
     }
 
     // Read from board 1 (ADS2) sensors if present
-    if (getBoard(boardAds2)->present) {
+    if (boardAvailable(boardAds2)) {
       Board *board = getBoard(boardAds2);
 
       // Ethanol sensor
@@ -578,36 +642,36 @@ void loop() {
                                         GAIN_BOARD2_DEFAULT, "EtOH");
       if (etohCharacteristic != NULL) {
         etohCharacteristic->setValue((uint8_t *)&etohVolt, sizeof(etohVolt));
-        etohCharacteristic->notify();
       }
+      jsonDocument["Etoh"] = etohVolt;
 
       // H2S sensor
       float h2sVolt = readChannelVolts(board, 1, GAIN_BOARD2_DEFAULT,
                                        GAIN_BOARD2_DEFAULT, "H2S");
       if (h2sCharacteristic != NULL) {
         h2sCharacteristic->setValue((uint8_t *)&h2sVolt, sizeof(h2sVolt));
-        h2sCharacteristic->notify();
       }
+      jsonDocument["H2S"] = h2sVolt;
 
       // NO2 sensor
       float no2Volt = readChannelVolts(board, 2, GAIN_BOARD2_DEFAULT,
                                        GAIN_BOARD2_DEFAULT, "NO2");
       if (no2Characteristic != NULL) {
         no2Characteristic->setValue((uint8_t *)&no2Volt, sizeof(no2Volt));
-        no2Characteristic->notify();
       }
+      jsonDocument["NO2"] = no2Volt;
 
       // NH3 sensor (read at a higher gain for its lower output range)
       float nh3Volt =
           readChannelVolts(board, 3, GAIN_NH3, GAIN_BOARD2_DEFAULT, "NH3");
       if (nh3Characteristic != NULL) {
         nh3Characteristic->setValue((uint8_t *)&nh3Volt, sizeof(nh3Volt));
-        nh3Characteristic->notify();
       }
+      jsonDocument["NH3"] = nh3Volt;
     }
 
     // Read from board 2 (ADS3) sensors if present
-    if (getBoard(boardAds3)->present) {
+    if (boardAvailable(boardAds3)) {
       Board *board = getBoard(boardAds3);
 
       // CO sensor
@@ -615,24 +679,24 @@ void loop() {
                                       GAIN_BOARD3_DEFAULT, "CO");
       if (coCharacteristic != NULL) {
         coCharacteristic->setValue((uint8_t *)&coVolt, sizeof(coVolt));
-        coCharacteristic->notify();
       }
+      jsonDocument["CO"] = coVolt;
 
       // Smoke sensor
       float smokeVolt = readChannelVolts(board, 1, GAIN_BOARD3_DEFAULT,
                                          GAIN_BOARD3_DEFAULT, "Smoke");
       if (smokeCharacteristic != NULL) {
         smokeCharacteristic->setValue((uint8_t *)&smokeVolt, sizeof(smokeVolt));
-        smokeCharacteristic->notify();
       }
+      jsonDocument["Smoke"] = smokeVolt;
 
       // H2 sensor
       float h2Volt = readChannelVolts(board, 2, GAIN_BOARD3_DEFAULT,
                                       GAIN_BOARD3_DEFAULT, "H2");
       if (h2Characteristic != NULL) {
         h2Characteristic->setValue((uint8_t *)&h2Volt, sizeof(h2Volt));
-        h2Characteristic->notify();
       }
+      jsonDocument["H2"] = h2Volt;
 
       Serial.print("CO:");
       Serial.print(coVolt);
@@ -644,14 +708,22 @@ void loop() {
 
     // Read battery percentage if present
     if (batteryMonitorPresent && batteryLevelCharacteristic != NULL) {
-      float batteryVoltage = batteryMonitor.cellVoltage();
-      float batteryPercentRaw = batteryMonitor.cellPercent();
+#if BRIAN_MOCK_SENSORS
+      const float batteryVoltage = mockWave(3.95f, 0.01f, 600.0f);
+      const float batteryPercentRaw = mockWave(82.0f, 0.4f, 600.0f);
+#else
+      const float batteryVoltage = batteryMonitor.cellVoltage();
+      const float batteryPercentRaw = batteryMonitor.cellPercent();
+#endif
 
       uint8_t batteryPercent =
           (uint8_t)constrain(batteryPercentRaw, 0.0f, 100.0f);
 
-      batteryLevelCharacteristic->setValue(&batteryPercent, sizeof(batteryPercent));
-      batteryLevelCharacteristic->notify();
+      batteryLevelCharacteristic->setValue(&batteryPercent,
+                                           sizeof(batteryPercent));
+
+      jsonDocument["battery"]["voltage"] = batteryVoltage;
+      jsonDocument["battery"]["percent"] = batteryPercentRaw;
 
       Serial.print("Battery voltage: ");
       Serial.print(batteryVoltage, 3);
@@ -664,46 +736,64 @@ void loop() {
 
     // Read from BME680 sensor if present
     if (bme680_present) {
+      bool bmeReadingAvailable = false;
+      float temperature = 0.0f;
+      float pressure = 0.0f;
+      float humidity = 0.0f;
+      float gas = 0.0f;
+      float altitude = 0.0f;
+#if BRIAN_MOCK_SENSORS
+      temperature = mockWave(21.5f, 0.3f, 180.0f);
+      pressure = mockWave(1013.25f, 1.2f, 240.0f, 1.0f);
+      humidity = mockWave(45.0f, 1.5f, 210.0f, 2.0f);
+      gas = mockWave(12000.0f, 500.0f, 300.0f, 0.5f);
+      altitude = 0.0f;
+      bmeReadingAvailable = true;
+#else
       if (bme680.performReading()) {
+        temperature = bme680.temperature;
+        pressure = bme680.pressure / 100.0f;
+        humidity = bme680.humidity;
+        gas = bme680.gas_resistance;
+        altitude = bme680.readAltitude(1013.25);
+        bmeReadingAvailable = true;
+      }
+#endif
+      if (bmeReadingAvailable) {
         // Read temperature
-        float temperature = bme680.temperature;
         if (temperatureCharacteristic != NULL) {
           temperatureCharacteristic->setValue((uint8_t *)&temperature,
                                               sizeof(temperature));
-          temperatureCharacteristic->notify();
         }
+        jsonDocument["TempC"] = temperature;
 
         // Read pressure (convert from Pa to hPa for BLE)
-        float pressure = bme680.pressure / 100.0;
         if (pressureCharacteristic != NULL) {
           pressureCharacteristic->setValue((uint8_t *)&pressure,
                                            sizeof(pressure));
-          pressureCharacteristic->notify();
         }
+        jsonDocument["PressureHPa"] = pressure;
 
         // Read humidity
-        float humidity = bme680.humidity;
         if (humidityCharacteristic != NULL) {
           humidityCharacteristic->setValue((uint8_t *)&humidity,
                                            sizeof(humidity));
-          humidityCharacteristic->notify();
         }
+        jsonDocument["HumidityPct"] = humidity;
 
         // Read gas resistance
-        float gas = bme680.gas_resistance;
         if (gasCharacteristic != NULL) {
           gasCharacteristic->setValue((uint8_t *)&gas, sizeof(gas));
-          gasCharacteristic->notify();
         }
+        jsonDocument["GasResOhm"] = gas;
 
         // Calculate and read altitude (assuming sea level pressure of 1013.25
         // hPa)
-        float altitude = bme680.readAltitude(1013.25);
         if (altitudeCharacteristic != NULL) {
           altitudeCharacteristic->setValue((uint8_t *)&altitude,
                                            sizeof(altitude));
-          altitudeCharacteristic->notify();
         }
+        jsonDocument["AltitudeM"] = altitude;
 
         // Debug output
         Serial.print("Temperature:");
@@ -722,8 +812,29 @@ void loop() {
       }
     }
 
-    // we are sending the values every 5 seconds
-    delay(5000);
+    uint8_t boardStatus = 0;
+    for (size_t i = 0; i < boardCount; i++) {
+      if (boards[i].present) {
+        boardStatus |= (1 << i);
+      }
+    }
+    if (bme680_present) {
+      boardStatus |= (1 << BOARD_STATUS_BME680_BIT);
+    }
+    jsonDocument["board_status"] = boardStatus;
+    jsonDocument["timestamp"] = static_cast<uint32_t>(time(NULL));
+
+    if (sensorDataJsonCharacteristic != NULL) {
+      String payload;
+      if (serializeJson(jsonDocument, payload) == 0) {
+        Serial.println("ERROR: Failed to serialize sensor readings JSON");
+      } else {
+        sensorDataJsonCharacteristic->setValue(std::string(payload.c_str()));
+        sensorDataJsonCharacteristic->notify();
+      }
+    }
+
+    delay(2500);
   }
   // disconnecting
   if (!deviceConnected && oldDeviceConnected) {
