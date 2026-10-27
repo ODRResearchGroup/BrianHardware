@@ -22,6 +22,7 @@ Keep these separate: don't apply V2 design decisions to the V1 firmware unless t
 pio run                        # build (env: MicroMod_ESP32)
 pio run -t upload              # flash
 pio device monitor -b 115200   # serial monitor
+pio run -e emulator_esp32      # BLE emulator (also _esp32s3, _esp32c3, _esp32c6, _xiao_esp32c6)
 ```
 
 There are no automated tests yet (`test/` is empty). The build succeeding is the minimum check; anything that touches sensor reading or BLE must also be verified on hardware by a person. Say so explicitly in your PR description, with what to check.
@@ -41,12 +42,14 @@ Full description: `hardware/README.md`.
 | ADS2 | `0x49` | EtOH | H₂S | NO₂ | NH₃ |
 | ADS3 | `0x4A` | CO | Smoke | H₂ | — |
 
-## Firmware structure (`src/main.cpp`)
+## Firmware structure
 
-Everything is in one file:
-
-- `setup()`: I²C at 400 kHz → `initMEMS()` (detects each ADS board) → `initBME680()` → BLE init with a unique name `Brian-XXXXXX` (last 3 bytes of the BT MAC), MTU 517, bonding ("Just Works") → creates characteristics **only for boards/sensors that were detected** → starts advertising.
-- `loop()`: **only samples while a BLE client is connected.** Reads each channel in turn, sets the characteristic value and notifies, then `delay(5000)`. A full cycle is therefore a little over 5 s.
+- `lib/BrianBLE/` — **the BLE contract**: all UUIDs, service placement and handle counts, security, advertising, time sync and board status. `BrianBLE::begin(namePrefix, boardStatus)` creates characteristics **only for boards whose status bit is set**; `BrianBLE::notify(channel, value)` sends a float. Both firmwares use it, so any BLE contract change goes here, never into `main.cpp` or the emulator. It must compile on Arduino-ESP32 2.x (Bluedroid) and 3.x (NimBLE, used on the ESP32-C6); stack-specific code is guarded with `CONFIG_NIMBLE_ENABLED`.
+- `src/main.cpp` — V1 firmware.
+  - `setup()`: I²C at 400 kHz → `initMEMS()` (detects each ADS board) → `initBME680()` → builds the board status byte → `BrianBLE::begin("Brian-", …)` (name `Brian-XXXXXX` from the last 3 bytes of the BT MAC, MTU 517, "Just Works" bonding).
+  - `loop()`: **only samples while a BLE client is connected.** Reads each channel in turn and notifies, then `delay(5000)`. A full cycle is therefore a little over 5 s.
+- `src/emulator/emulator.cpp` — BLE emulator: same contract via `BrianBLE`, synthetic data, name `Brian-SIM-XXXXXX`, runs on any ESP32 (see README "BLE Emulator"). Excluded from the V1 build by `build_src_filter`. When V1's sampling behaviour changes (channels, order, units, cadence), update the emulator to match.
+- `platformio.ini`: the V1 env pins `platformio/espressif32` (Arduino-ESP32 2.x). The C6 emulator envs use the pioarduino platform (Arduino 3.x), which is also called `espressif32`, so never use an unqualified `platform = espressif32`.
 - Libraries (`platformio.ini`): Adafruit ADS1X15, Adafruit BME680, Adafruit LC709203F (declared, not yet used), sunset, Chrono.
 
 ### Known issues in the current firmware (see open issues)
@@ -94,6 +97,8 @@ Everything is in one file:
 | 1 | ADS2 (`0x49`): EtOH, H₂S, NO₂, NH₃ |
 | 2 | ADS3 (`0x4A`): CO, Smoke, H₂ |
 | 3 | BME680 |
+
+The contract is implemented once, in `lib/BrianBLE` (used by both the V1 firmware and the emulator); update this table and that library together.
 
 When adding new data (e.g. battery), prefer standard SIG services/characteristics where they exist (Battery Service `0x180F` / Battery Level `0x2A19`), and document them here and in `README.md`.
 

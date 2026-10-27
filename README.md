@@ -86,6 +86,52 @@ pio run -t upload
 pio device monitor -b 115200
 ```
 
+### BLE Emulator (no sensors needed)
+
+`src/emulator/` is a stand-in firmware for developing and testing **BrianReactNative**, **BrianWeb** and the data pipeline without a physical BRIAN. It runs on any ESP32 dev board with nothing attached and serves exactly the same BLE contract as the V1 firmware (same services, characteristic UUIDs, payload format, time sync, board status, MTU, bonding), with synthetic data:
+
+- 11 gas channels: per-channel baseline voltage, slow drift and small noise, clipped to the ADC range V1 reads each channel at.
+- Occasional odour events (roughly every few minutes): a rise and exponential decay on a plausible group of channels together (e.g. VOC/EtOH/Odor/H₂, or CO/Smoke/NO₂).
+- BME680 values that agree with each other: slowly varying temperature and dew point (relative humidity is derived from them), pressure around 1013 hPa, altitude from pressure with V1's formula, gas resistance dropping during odour events.
+
+Both firmwares build their BLE profile from the shared library `lib/BrianBLE`, so a change to the contract applies to the emulator automatically.
+
+**Recognising emulator data:** the emulator advertises as **`Brian-SIM-XXXXXX`** (real devices: `Brian-XXXXXX`). Both clients' scan filters (`Brian` / `Brian-` prefix) find it, and the app records the device name as the data source, so filter on the `Brian-SIM-` prefix to keep synthetic data out of analyses (e.g. in Influx). Its serial banner also says `SYNTHETIC DATA`.
+
+**Supported boards** (one PlatformIO env each):
+
+| Env | Board | Arduino-ESP32 core |
+|---|---|---|
+| `emulator_esp32` | Any classic ESP32 dev board (`esp32dev`) | 2.x, same as V1 |
+| `emulator_esp32s3` | ESP32-S3-DevKitC-1 and most S3 boards | 2.x |
+| `emulator_esp32c3` | ESP32-C3-DevKitM-1 and most C3 boards | 2.x |
+| `emulator_esp32c6` | ESP32-C6-DevKitC-1 | 3.x (pioarduino platform) |
+| `emulator_xiao_esp32c6` | Seeed Studio XIAO ESP32C6 (built-in antenna) | 3.x (pioarduino platform) |
+
+For another board, copy an env and change `board =`. Boards whose only USB port is the chip's native USB (e.g. C3/S3 "super mini" boards) need `-DARDUINO_USB_CDC_ON_BOOT=1` in `build_flags` to see Serial output. The ESP32-C6 is only supported by Arduino-ESP32 3.x, which uses the NimBLE stack instead of Bluedroid; `lib/BrianBLE` handles the differences (CCCDs, encrypted time-sync write).
+
+**Flash and monitor:**
+
+```bash
+pio run -e emulator_xiao_esp32c6 -t upload
+pio device monitor -b 115200
+```
+
+**Options** (compile-time, add to the env's `build_flags`, or for one build e.g. `PLATFORMIO_BUILD_FLAGS="-DBRIAN_SIM_INTERVAL_MS=1000" pio run -e emulator_esp32 -t upload`):
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `BRIAN_SIM_INTERVAL_MS` | `5000` | Notify cycle (V1 is ~5 s); e.g. `1000` for stress tests |
+| `BRIAN_SIM_BOARDS` | `0x0F` | Emulated boards, same bits as the board status characteristic (bit 0 ADS1, 1 ADS2, 2 ADS3, 3 BME680). E.g. `0x0B` = no ADS3, `0x07` = no BME680. Missing boards get no characteristics, like V1's detect-and-skip |
+| `BRIAN_SIM_SEED` | `0` | PRNG seed; `0` = different every boot, any other value gives the same data every run |
+| `BRIAN_SIM_EVENT_MEAN_S` | `90` | Mean seconds between odour event triggers |
+
+**Serial commands** (type in the monitor): `e` start an odour event, `p` pause/resume notifications (connection stays up), `d` disconnect the client (to test reconnects), `s` status, `h` help.
+
+Like V1, the emulator only sends notifications while a client is connected.
+
+> **Note on PlatformIO platforms:** the ESP32-C6 envs use the [pioarduino](https://github.com/pioarduino/platform-espressif32) platform, which is also named `espressif32`. That is why the V1 env pins `platformio/espressif32` explicitly. Switching between a C6 env and the other envs makes PlatformIO swap the shared framework package, so the first build after a switch re-downloads it.
+
 ### Development Guidelines
 
 - Keep changes focused and small per PR.
@@ -105,7 +151,9 @@ See the hardware docs in [`hardware/`](./hardware):
 
 ### Repository Layout
 
-- `src/` — firmware source code
+- `src/` — V1 firmware source code (`src/main.cpp`)
+- `src/emulator/` — BLE emulator firmware (synthetic data, see above)
+- `lib/BrianBLE/` — the BLE contract (UUIDs, services, characteristics) shared by both
 - `include/` — headers
 - `lib/` — private libraries
 - `test/` — PlatformIO tests
