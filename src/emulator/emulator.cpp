@@ -335,6 +335,13 @@ void handleSerial() {
 
 void setup() {
   Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT
+  // Native USB serial (e.g. XIAO ESP32C6) counts as connected whenever the
+  // board is plugged into a host, even if no serial monitor is reading it.
+  // With the default timeout every print then blocks once the TX buffer is
+  // full, stalling loop() and the BLE notify cycle. Drop output instead.
+  Serial.setTxTimeoutMs(0);
+#endif
   delay(1000); // let USB CDC enumerate so the banner isn't lost
 
   rngState = BRIAN_SIM_SEED != 0 ? (uint32_t)BRIAN_SIM_SEED : esp_random();
