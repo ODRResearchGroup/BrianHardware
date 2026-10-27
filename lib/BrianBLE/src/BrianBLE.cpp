@@ -144,6 +144,25 @@ class ServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
 };
 
+#if defined(CONFIG_NIMBLE_ENABLED)
+// NimBLE persists a bonded peer's CCCD subscriptions, but the prebuilt
+// Arduino-ESP32 3.x libs cap that store at CONFIG_BT_NIMBLE_MAX_CCCDS (8),
+// fewer than our notifying characteristics. A full store makes the default
+// overflow handler unpair a peer (the client then can't reconnect: "Peer
+// removed pairing information"), and fails the client's CCCD write with an
+// ATT error. Clients re-subscribe on every connect, so report CCCDs that
+// don't fit as stored; the subscription itself still applies.
+ble_store_write_fn *nimbleStoreWrite = NULL;
+
+int storeWrite(int objType, const union ble_store_value *val) {
+  int rc = nimbleStoreWrite(objType, val);
+  if (rc == BLE_HS_ESTORE_CAP && objType == BLE_STORE_OBJ_TYPE_CCCD) {
+    return 0;
+  }
+  return rc;
+}
+#endif
+
 } // namespace
 
 const char *channelName(Channel channel) {
@@ -171,6 +190,10 @@ void begin(const char *namePrefix, uint8_t boardStatus) {
   snprintf(name, sizeof(name), "%s%02X%02X%02X", namePrefix, bluetoothMac[3],
            bluetoothMac[4], bluetoothMac[5]);
   BLEDevice::init(name);
+#if defined(CONFIG_NIMBLE_ENABLED)
+  nimbleStoreWrite = ble_hs_cfg.store_write_cb;
+  ble_hs_cfg.store_write_cb = storeWrite;
+#endif
   // this is for increasing the MTU size - default is 23 bytes, we can set it up
   // to 517 bytes
   BLEDevice::setMTU(517);
