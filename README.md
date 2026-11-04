@@ -116,6 +116,24 @@ See the hardware docs in [`hardware/`](./hardware):
 - Device name: `BRIAN`
 - Standard service: Environmental Sensing Service (`0x181A`)
 - Custom service: `de664a17-7db4-449f-97ba-5514e19a9d94`
+- Gas frame characteristic (notify, custom service):
+  `9f4c8f2b-5e0a-4b8e-9f0d-6d9a1c2e7b34` — fixed 58-byte binary frame every
+  5 seconds. The 8-byte header is `u8 version`, `u8 flags`, `u16 cycle`, and
+  `u32 timestamp`, all little-endian. It is followed by a `u16` presence mask
+  and 12 little-endian float32 slots: HCHO, CH4, VOC, Odor, EtOH, H2S, NO2,
+  NH3, CO, Smoke, H2, and unused ADS3 A3. Missing slots are NaN and have a
+  cleared mask bit. Bit 0 of flags means the timestamp is Unix time; otherwise
+  it is uptime seconds.
+- Environmental frame characteristic (notify, custom service):
+  `c2d7a8e1-7f34-4d6b-9a02-1b5e8c4f6d70` — fixed 29-byte binary frame with the
+  same header, followed by a `u8` presence mask and float32 values in this
+  order: temperature (C), pressure (hPa), humidity (%), BME680 gas resistance
+  (ohms), and altitude (m). Gas and environmental frames from one cycle share
+  the same cycle counter.
+- Battery remains on the standard Battery Service (`0x180F` / `0x2A19`) and
+  notifies only when the percentage changes. Board status remains the
+  read-only characteristic below. Legacy per-sensor characteristics remain
+  readable for transition compatibility but no longer notify.
 - Time sync characteristic (write): `a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d`
 - Board status characteristic (read, custom service): `407fd299-d6ed-45ed-ab21-437f101c8acd` — 1-byte bitmask, bit 0/1/2 = ADS1/ADS2/ADS3 detected, bit 3 = BME680 detected, captured once at boot
 

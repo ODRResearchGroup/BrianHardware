@@ -36,6 +36,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <esp_mac.h>
+#include <string>
 #include <sys/time.h>
 
 BLEServer *pServer = NULL;
@@ -88,12 +89,81 @@ BLECharacteristic *batteryLevelCharacteristic = NULL;
 // Time synchronization characteristic
 BLECharacteristic *timeSyncCharacteristic = NULL;
 
+// Fixed binary sample frames. Values are little-endian float32 values.
+#define GAS_FRAME_CHARACTERISTIC_UUID \
+  "9f4c8f2b-5e0a-4b8e-9f0d-6d9a1c2e7b34"
+#define ENV_FRAME_CHARACTERISTIC_UUID \
+  "c2d7a8e1-7f34-4d6b-9a02-1b5e8c4f6d70"
+BLECharacteristic *gasFrameCharacteristic = NULL;
+BLECharacteristic *envFrameCharacteristic = NULL;
+
+constexpr uint8_t FRAME_VERSION = 1;
+constexpr size_t GAS_FRAME_LENGTH = 58;
+constexpr size_t ENV_FRAME_LENGTH = 29;
+constexpr uint8_t GAS_SLOT_COUNT = 12;
+constexpr uint8_t ENV_VALUE_COUNT = 5;
+
+// Gas slots: ADS board * 4 + ADC channel. Slot 11 (ADS3 A3) is unused.
+enum GasSlot : uint8_t {
+  GAS_HCHO = 0,
+  GAS_CH4 = 1,
+  GAS_VOC = 2,
+  GAS_ODOR = 3,
+  GAS_ETOH = 4,
+  GAS_H2S = 5,
+  GAS_NO2 = 6,
+  GAS_NH3 = 7,
+  GAS_CO = 8,
+  GAS_SMOKE = 9,
+  GAS_H2 = 10
+};
+
+uint16_t sampleCycle = 0;
+int lastBatteryPercent = -1;
+bool gasMtuWarningLogged = false;
+bool envMtuWarningLogged = false;
+
+void writeFrameHeader(uint8_t *frame, uint8_t flags, uint16_t cycle,
+                      uint32_t timestamp) {
+  frame[0] = FRAME_VERSION;
+  frame[1] = flags;
+  memcpy(frame + 2, &cycle, sizeof(cycle));
+  memcpy(frame + 4, &timestamp, sizeof(timestamp));
+}
+
+void writeFloat(uint8_t *frame, size_t offset, float value) {
+  memcpy(frame + offset, &value, sizeof(value));
+}
+
+void notifyFrameIfFits(BLECharacteristic *characteristic, uint8_t *frame,
+                       size_t frameLength, bool *warningLogged) {
+  if (characteristic == NULL || pServer == NULL) {
+    return;
+  }
+
+  for (const auto &peer : pServer->getPeerDevices(false)) {
+    const uint16_t payloadLength = peer.second.mtu - 3;
+    if (frameLength > payloadLength) {
+      if (!*warningLogged) {
+        Serial.print("WARNING: frame needs ");
+        Serial.print(frameLength + 3);
+        Serial.print(" byte MTU, peer negotiated ");
+        Serial.println(peer.second.mtu);
+        *warningLogged = true;
+      }
+      return;
+    }
+  }
+
+  characteristic->setValue(frame, frameLength);
+  characteristic->notify();
+}
+
 // Board status characteristic: reports which I2C boards were detected at
 // boot, independent of whether any per-sensor characteristics exist for them.
 // Always created (unlike the sensor characteristics above), so clients can
 // show hardware health even for a board that is entirely missing.
-#define BOARD_STATUS_CHARACTERISTIC_UUID                                      \
-  "407fd299-d6ed-45ed-ab21-437f101c8acd"
+#define BOARD_STATUS_CHARACTERISTIC_UUID "407fd299-d6ed-45ed-ab21-437f101c8acd"
 BLECharacteristic *boardStatusCharacteristic = NULL;
 
 // Bit layout of the board status byte. Status is captured once at boot
@@ -139,6 +209,10 @@ Board *getBoard(uint8_t board_num) {
   return NULL;
 }
 
+bool boardAvailable(uint8_t board_num) {
+  return getBoard(board_num)->present;
+}
+
 // BME680 environmental sensor
 Adafruit_BME680 bme680;
 bool bme680_present = false;
@@ -146,7 +220,6 @@ bool bme680_present = false;
 // Battery fuel gauge
 Adafruit_LC709203F batteryMonitor;
 bool batteryMonitorPresent = false;
-
 
 // Initialize BME680 sensor and detect if present
 void initBME680() {
@@ -308,12 +381,12 @@ void setup() {
   Serial.println("I2C scanner");
 
   for (uint8_t address = 1; address < 127; address++) {
-      Wire.beginTransmission(address);
-      uint8_t error = Wire.endTransmission();
-    
-      if (error == 0) {
-          Serial.printf("Found device at 0x%02X\n", address);
-      }
+    Wire.beginTransmission(address);
+    uint8_t error = Wire.endTransmission();
+
+    if (error == 0) {
+      Serial.printf("Found device at 0x%02X\n", address);
+    }
   }
 
   initMEMS();
@@ -369,74 +442,63 @@ void setup() {
   // these are for ESS standardised characteristics
   // Taken partially from
   // https://www.bluetooth.com/specifications/assigned-numbers/
-  if (getBoard(boardAds1)->present) {
+  if (boardAvailable(boardAds1)) {
     ch4Characteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2BD1),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(ch4Characteristic);
+        BLECharacteristic::PROPERTY_READ);
 
     vocCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2BD3),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(vocCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
 
     // these are for custom characteristics, generated at
     // https://www.uuidgenerator.net/guid (ADS1 sensors)
     hchoCharacteristic = customService->createCharacteristic(
         BLEUUID("6a135b89-f360-4f64-86fc-5a14092034b4"),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(hchoCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
 
     odorCharacteristic = customService->createCharacteristic(
         BLEUUID("4c28fcb8-d69b-404a-8668-41655d814e7f"),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(odorCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
   }
 
-  if (getBoard(boardAds2)->present) {
+  if (boardAvailable(boardAds2)) {
 
     nh3Characteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2BCF),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(nh3Characteristic);
+        BLECharacteristic::PROPERTY_READ);
 
     no2Characteristic = essService->createCharacteristic( // Fixed name
         BLEUUID((uint16_t)0x2BD2),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(no2Characteristic);
+        BLECharacteristic::PROPERTY_READ);
 
     etohCharacteristic = customService->createCharacteristic(
         BLEUUID("f8156843-6d98-4ba2-8014-1cf03d7dedb8"),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(etohCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
 
     h2sCharacteristic = customService->createCharacteristic(
         BLEUUID("87dc71bd-29a4-4218-a2a7-83fd2a69cc40"),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(h2sCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
   }
 
   Serial.print("BoardAds3 (0x4A) present flag: ");
-  Serial.println(getBoard(boardAds3)->present ? "TRUE" : "FALSE");
+  Serial.println(boardAvailable(boardAds3) ? "TRUE" : "FALSE");
 
-  if (getBoard(boardAds3)->present) {
+  if (boardAvailable(boardAds3)) {
     Serial.println("Creating CO, Smoke, H2 characteristics...");
     coCharacteristic = customService->createCharacteristic(
         BLEUUID("88f6fa6c-c4e0-4a3d-ba72-f435641251c4"),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(coCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
     Serial.println("  Created CO characteristic");
 
     smokeCharacteristic = customService->createCharacteristic(
         BLEUUID("cafb955e-6e7b-424b-9e03-6d8d003aa286"),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(smokeCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
     Serial.println("  Created Smoke characteristic");
 
     h2Characteristic = customService->createCharacteristic(
         BLEUUID("0176655b-0007-4e02-abc1-e9f2d6815f46"),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(h2Characteristic);
+        BLECharacteristic::PROPERTY_READ);
     Serial.println("  Created H2 characteristic");
   } else {
     Serial.println(
@@ -448,34 +510,29 @@ void setup() {
     // Temperature (ESS standard UUID 0x2A6E)
     temperatureCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2A6E),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(temperatureCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
     Serial.println("Created Temperature characteristic with NOTIFY property");
 
     // Pressure (ESS standard UUID 0x2A6D)
     pressureCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2A6D),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(pressureCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
     Serial.println("Created Pressure characteristic with NOTIFY property");
 
     // Humidity (ESS standard UUID 0x2A6F)
     humidityCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2A6F),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(humidityCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
 
     // Altitude (ESS standard UUID 0x2A69)
     altitudeCharacteristic = essService->createCharacteristic(
         BLEUUID((uint16_t)0x2A69),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(altitudeCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
 
     // Gas resistance (custom UUID)
     gasCharacteristic = customService->createCharacteristic(
         BLEUUID("5b0e3c0b-1a44-4b76-82ee-8c2adc2dd8e9"),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    setupCCCDDescriptor(gasCharacteristic);
+        BLECharacteristic::PROPERTY_READ);
   }
 
   // Create time synchronization characteristic (always available)
@@ -488,18 +545,29 @@ void setup() {
   timeSyncCharacteristic->setAccessPermissions(ESP_GATT_PERM_WRITE_ENCRYPTED);
   timeSyncCharacteristic->setCallbacks(new TimeSyncCallbacks());
 
+  // Gas and environmental samples use fixed-size binary notifications.
+  gasFrameCharacteristic = customService->createCharacteristic(
+      BLEUUID(GAS_FRAME_CHARACTERISTIC_UUID),
+      BLECharacteristic::PROPERTY_NOTIFY);
+  setupCCCDDescriptor(gasFrameCharacteristic);
+  envFrameCharacteristic = customService->createCharacteristic(
+      BLEUUID(ENV_FRAME_CHARACTERISTIC_UUID),
+      BLECharacteristic::PROPERTY_NOTIFY);
+  setupCCCDDescriptor(envFrameCharacteristic);
+  Serial.println("Gas frame requires a negotiated MTU of at least 61 bytes");
+
   // we are starting all services
   // Board status: always created, regardless of what was detected, so a
   // client can distinguish "board missing" from "characteristic not
   // discovered". Captured once here; never updated in loop().
   uint8_t boardStatus = 0;
-  if (getBoard(boardAds1)->present) {
+  if (boardAvailable(boardAds1)) {
     boardStatus |= (1 << BOARD_STATUS_ADS1_BIT);
   }
-  if (getBoard(boardAds2)->present) {
+  if (boardAvailable(boardAds2)) {
     boardStatus |= (1 << BOARD_STATUS_ADS2_BIT);
   }
-  if (getBoard(boardAds3)->present) {
+  if (boardAvailable(boardAds3)) {
     boardStatus |= (1 << BOARD_STATUS_ADS3_BIT);
   }
   if (bme680_present) {
@@ -531,46 +599,57 @@ void setup() {
 
 void loop() {
   if (deviceConnected) {
+    float gasValues[GAS_SLOT_COUNT];
+    for (uint8_t i = 0; i < GAS_SLOT_COUNT; i++) {
+      gasValues[i] = NAN;
+    }
+    uint16_t gasMask = 0;
+    float envValues[ENV_VALUE_COUNT] = {NAN, NAN, NAN, NAN, NAN};
+    uint8_t envMask = 0;
+
     // Read from board 0 (ADS1) sensors if present
-    if (getBoard(boardAds1)->present) {
+    if (boardAvailable(boardAds1)) {
       Board *board = getBoard(boardAds1);
 
       // Formaldehyde sensor
       float hchoVolt = readChannelVolts(board, 0, GAIN_BOARD1_DEFAULT,
                                         GAIN_BOARD1_DEFAULT, "HCHO");
-      // Send the voltage value as a 4-byte float over BLE
       if (hchoCharacteristic != NULL) {
         hchoCharacteristic->setValue((uint8_t *)&hchoVolt, sizeof(hchoVolt));
-        hchoCharacteristic->notify();
       }
+      gasValues[GAS_HCHO] = hchoVolt;
+      gasMask |= (1 << GAS_HCHO);
 
       // CH4 sensor
       float ch4Volt = readChannelVolts(board, 1, GAIN_BOARD1_DEFAULT,
                                        GAIN_BOARD1_DEFAULT, "CH4");
       if (ch4Characteristic != NULL) {
         ch4Characteristic->setValue((uint8_t *)&ch4Volt, sizeof(ch4Volt));
-        ch4Characteristic->notify();
       }
+      gasValues[GAS_CH4] = ch4Volt;
+      gasMask |= (1 << GAS_CH4);
 
       // VOC sensor (read at a higher gain for its lower output range)
       float vocVolt =
           readChannelVolts(board, 2, GAIN_VOC, GAIN_BOARD1_DEFAULT, "VOC");
       if (vocCharacteristic != NULL) {
         vocCharacteristic->setValue((uint8_t *)&vocVolt, sizeof(vocVolt));
-        vocCharacteristic->notify();
       }
+      gasValues[GAS_VOC] = vocVolt;
+      gasMask |= (1 << GAS_VOC);
 
       // Odor sensor
       float odorVolt = readChannelVolts(board, 3, GAIN_BOARD1_DEFAULT,
                                         GAIN_BOARD1_DEFAULT, "Odor");
       if (odorCharacteristic != NULL) {
         odorCharacteristic->setValue((uint8_t *)&odorVolt, sizeof(odorVolt));
-        odorCharacteristic->notify();
       }
+      gasValues[GAS_ODOR] = odorVolt;
+      gasMask |= (1 << GAS_ODOR);
     }
 
     // Read from board 1 (ADS2) sensors if present
-    if (getBoard(boardAds2)->present) {
+    if (boardAvailable(boardAds2)) {
       Board *board = getBoard(boardAds2);
 
       // Ethanol sensor
@@ -578,36 +657,40 @@ void loop() {
                                         GAIN_BOARD2_DEFAULT, "EtOH");
       if (etohCharacteristic != NULL) {
         etohCharacteristic->setValue((uint8_t *)&etohVolt, sizeof(etohVolt));
-        etohCharacteristic->notify();
       }
+      gasValues[GAS_ETOH] = etohVolt;
+      gasMask |= (1 << GAS_ETOH);
 
       // H2S sensor
       float h2sVolt = readChannelVolts(board, 1, GAIN_BOARD2_DEFAULT,
                                        GAIN_BOARD2_DEFAULT, "H2S");
       if (h2sCharacteristic != NULL) {
         h2sCharacteristic->setValue((uint8_t *)&h2sVolt, sizeof(h2sVolt));
-        h2sCharacteristic->notify();
       }
+      gasValues[GAS_H2S] = h2sVolt;
+      gasMask |= (1 << GAS_H2S);
 
       // NO2 sensor
       float no2Volt = readChannelVolts(board, 2, GAIN_BOARD2_DEFAULT,
                                        GAIN_BOARD2_DEFAULT, "NO2");
       if (no2Characteristic != NULL) {
         no2Characteristic->setValue((uint8_t *)&no2Volt, sizeof(no2Volt));
-        no2Characteristic->notify();
       }
+      gasValues[GAS_NO2] = no2Volt;
+      gasMask |= (1 << GAS_NO2);
 
       // NH3 sensor (read at a higher gain for its lower output range)
       float nh3Volt =
           readChannelVolts(board, 3, GAIN_NH3, GAIN_BOARD2_DEFAULT, "NH3");
       if (nh3Characteristic != NULL) {
         nh3Characteristic->setValue((uint8_t *)&nh3Volt, sizeof(nh3Volt));
-        nh3Characteristic->notify();
       }
+      gasValues[GAS_NH3] = nh3Volt;
+      gasMask |= (1 << GAS_NH3);
     }
 
     // Read from board 2 (ADS3) sensors if present
-    if (getBoard(boardAds3)->present) {
+    if (boardAvailable(boardAds3)) {
       Board *board = getBoard(boardAds3);
 
       // CO sensor
@@ -615,24 +698,27 @@ void loop() {
                                       GAIN_BOARD3_DEFAULT, "CO");
       if (coCharacteristic != NULL) {
         coCharacteristic->setValue((uint8_t *)&coVolt, sizeof(coVolt));
-        coCharacteristic->notify();
       }
+      gasValues[GAS_CO] = coVolt;
+      gasMask |= (1 << GAS_CO);
 
       // Smoke sensor
       float smokeVolt = readChannelVolts(board, 1, GAIN_BOARD3_DEFAULT,
                                          GAIN_BOARD3_DEFAULT, "Smoke");
       if (smokeCharacteristic != NULL) {
         smokeCharacteristic->setValue((uint8_t *)&smokeVolt, sizeof(smokeVolt));
-        smokeCharacteristic->notify();
       }
+      gasValues[GAS_SMOKE] = smokeVolt;
+      gasMask |= (1 << GAS_SMOKE);
 
       // H2 sensor
       float h2Volt = readChannelVolts(board, 2, GAIN_BOARD3_DEFAULT,
                                       GAIN_BOARD3_DEFAULT, "H2");
       if (h2Characteristic != NULL) {
         h2Characteristic->setValue((uint8_t *)&h2Volt, sizeof(h2Volt));
-        h2Characteristic->notify();
       }
+      gasValues[GAS_H2] = h2Volt;
+      gasMask |= (1 << GAS_H2);
 
       Serial.print("CO:");
       Serial.print(coVolt);
@@ -644,14 +730,19 @@ void loop() {
 
     // Read battery percentage if present
     if (batteryMonitorPresent && batteryLevelCharacteristic != NULL) {
-      float batteryVoltage = batteryMonitor.cellVoltage();
-      float batteryPercentRaw = batteryMonitor.cellPercent();
+      const float batteryVoltage = batteryMonitor.cellVoltage();
+      const float batteryPercentRaw = batteryMonitor.cellPercent();
 
       uint8_t batteryPercent =
           (uint8_t)constrain(batteryPercentRaw, 0.0f, 100.0f);
 
-      batteryLevelCharacteristic->setValue(&batteryPercent, sizeof(batteryPercent));
-      batteryLevelCharacteristic->notify();
+      batteryLevelCharacteristic->setValue(&batteryPercent,
+                                           sizeof(batteryPercent));
+
+      if (lastBatteryPercent != batteryPercent) {
+        batteryLevelCharacteristic->notify();
+        lastBatteryPercent = batteryPercent;
+      }
 
       Serial.print("Battery voltage: ");
       Serial.print(batteryVoltage, 3);
@@ -664,46 +755,60 @@ void loop() {
 
     // Read from BME680 sensor if present
     if (bme680_present) {
+      bool bmeReadingAvailable = false;
+      float temperature = 0.0f;
+      float pressure = 0.0f;
+      float humidity = 0.0f;
+      float gas = 0.0f;
+      float altitude = 0.0f;
       if (bme680.performReading()) {
+        temperature = bme680.temperature;
+        pressure = bme680.pressure / 100.0f;
+        humidity = bme680.humidity;
+        gas = bme680.gas_resistance;
+        altitude = bme680.readAltitude(1013.25);
+        bmeReadingAvailable = true;
+      }
+      if (bmeReadingAvailable) {
         // Read temperature
-        float temperature = bme680.temperature;
         if (temperatureCharacteristic != NULL) {
           temperatureCharacteristic->setValue((uint8_t *)&temperature,
                                               sizeof(temperature));
-          temperatureCharacteristic->notify();
         }
+        envValues[0] = temperature;
+        envMask |= (1 << 0);
 
         // Read pressure (convert from Pa to hPa for BLE)
-        float pressure = bme680.pressure / 100.0;
         if (pressureCharacteristic != NULL) {
           pressureCharacteristic->setValue((uint8_t *)&pressure,
                                            sizeof(pressure));
-          pressureCharacteristic->notify();
         }
+        envValues[1] = pressure;
+        envMask |= (1 << 1);
 
         // Read humidity
-        float humidity = bme680.humidity;
         if (humidityCharacteristic != NULL) {
           humidityCharacteristic->setValue((uint8_t *)&humidity,
                                            sizeof(humidity));
-          humidityCharacteristic->notify();
         }
+        envValues[2] = humidity;
+        envMask |= (1 << 2);
 
         // Read gas resistance
-        float gas = bme680.gas_resistance;
         if (gasCharacteristic != NULL) {
           gasCharacteristic->setValue((uint8_t *)&gas, sizeof(gas));
-          gasCharacteristic->notify();
         }
+        envValues[3] = gas;
+        envMask |= (1 << 3);
 
         // Calculate and read altitude (assuming sea level pressure of 1013.25
         // hPa)
-        float altitude = bme680.readAltitude(1013.25);
         if (altitudeCharacteristic != NULL) {
           altitudeCharacteristic->setValue((uint8_t *)&altitude,
                                            sizeof(altitude));
-          altitudeCharacteristic->notify();
         }
+        envValues[4] = altitude;
+        envMask |= (1 << 4);
 
         // Debug output
         Serial.print("Temperature:");
@@ -722,7 +827,31 @@ void loop() {
       }
     }
 
-    // we are sending the values every 5 seconds
+    time_t currentTime = time(NULL);
+    bool timeSynced = currentTime >= 1700000000;
+    uint32_t timestamp =
+        timeSynced ? static_cast<uint32_t>(currentTime) : millis() / 1000;
+    uint8_t frameFlags = timeSynced ? 0x01 : 0x00;
+    uint16_t cycle = sampleCycle++;
+
+    uint8_t gasFrame[GAS_FRAME_LENGTH];
+    writeFrameHeader(gasFrame, frameFlags, cycle, timestamp);
+    memcpy(gasFrame + 8, &gasMask, sizeof(gasMask));
+    for (uint8_t i = 0; i < GAS_SLOT_COUNT; i++) {
+      writeFloat(gasFrame, 10 + (i * sizeof(float)), gasValues[i]);
+    }
+    notifyFrameIfFits(gasFrameCharacteristic, gasFrame, sizeof(gasFrame),
+                      &gasMtuWarningLogged);
+
+    uint8_t envFrame[ENV_FRAME_LENGTH];
+    writeFrameHeader(envFrame, frameFlags, cycle, timestamp);
+    envFrame[8] = envMask;
+    for (uint8_t i = 0; i < ENV_VALUE_COUNT; i++) {
+      writeFloat(envFrame, 9 + (i * sizeof(float)), envValues[i]);
+    }
+    notifyFrameIfFits(envFrameCharacteristic, envFrame, sizeof(envFrame),
+                      &envMtuWarningLogged);
+
     delay(5000);
   }
   // disconnecting
