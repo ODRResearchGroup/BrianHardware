@@ -86,7 +86,7 @@ Everything is in one file:
 | Time sync (write) | custom | `a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d` | Unix seconds, 8 or 4 bytes LE; encrypted link required |
 | Board status | custom | `407fd299-d6ed-45ed-ab21-437f101c8acd` | 1-byte bitmask, read-only, captured once at boot (see below) |
 
-**Board status bitmask** (`BOARD_STATUS_CHARACTERISTIC_UUID`): bit *n* set = that I2C board was detected in `initMEMS()`/`initBME680()` at boot, independent of whether its sensor characteristics were created. Not updated after boot (no live re-check). Battery monitor status is out of scope (tracked separately in #16).
+**Board status bitmask** (`BOARD_STATUS_CHARACTERISTIC_UUID`): bit *n* set = that I2C device was detected at boot, independent of whether its sensor characteristics were created. Not updated after boot (no live re-check).
 
 | Bit | Board |
 |---|---|
@@ -94,6 +94,7 @@ Everything is in one file:
 | 1 | ADS2 (`0x49`): EtOH, H₂S, NO₂, NH₃ |
 | 2 | ADS3 (`0x4A`): CO, Smoke, H₂ |
 | 3 | BME680 |
+| 4 | LC709203F battery monitor |
 
 When adding new data (e.g. battery), prefer standard SIG services/characteristics where they exist (Battery Service `0x180F` / Battery Level `0x2A19`), and document them here and in `README.md`.
 

@@ -106,6 +106,7 @@ constexpr uint8_t BOARD_STATUS_ADS1_BIT = 0;   // 0x48: HCHO, CH4, VOC, Odor
 constexpr uint8_t BOARD_STATUS_ADS2_BIT = 1;   // 0x49: EtOH, H2S, NO2, NH3
 constexpr uint8_t BOARD_STATUS_ADS3_BIT = 2;   // 0x4A: CO, Smoke, H2
 constexpr uint8_t BOARD_STATUS_BME680_BIT = 3; // Environmental sensor
+constexpr uint8_t BOARD_STATUS_BATTERY_MONITOR_BIT = 4; // LC709203F
 
 // Board structure to hold information about each ADS1115 board.
 // The MEMS breakouts carry ADS1115 (16-bit) chips; using the ADS1115 driver
@@ -676,6 +677,9 @@ void setup() {
   }
   if (bme680_present) {
     boardStatus |= (1 << BOARD_STATUS_BME680_BIT);
+  }
+  if (batteryMonitorPresent) {
+    boardStatus |= (1 << BOARD_STATUS_BATTERY_MONITOR_BIT);
   }
   boardStatusCharacteristic = customService->createCharacteristic(
       BLEUUID(BOARD_STATUS_CHARACTERISTIC_UUID),
