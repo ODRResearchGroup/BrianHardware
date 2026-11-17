@@ -70,12 +70,24 @@
 
 ## Wireless Communication
 
-BLE 5 via the ESP32 radio, with MTU extended to 517 bytes. Two GATT services are advertised:
+BLE 5 via the ESP32 radio, with MTU requested up to 517 bytes. Two GATT services are advertised:
 
 | Service                             | UUID                                   | Characteristics                                                                   |
 | ----------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------- |
 | Environmental Sensing Service (ESS) | `0x181A` (standard)                    | CH₄, VOC, NH₃, NO₂, Temperature, Pressure, Humidity, Altitude                     |
 | Custom Sensor Service               | `de664a17-7db4-449f-97ba-5514e19a9d94` | HCHO, Odor, EtOH, H₂S, CO, Smoke, H₂, BME680 gas resistance, Time sync (writable) |
+
+Sampling notifications use fixed binary frames in the custom service:
+
+- Gas frame `9f4c8f2b-5e0a-4b8e-9f0d-6d9a1c2e7b34`: 58 bytes (header, `u16`
+  presence mask, 12 float32 gas slots).
+- Environmental frame `c2d7a8e1-7f34-4d6b-9a02-1b5e8c4f6d70`: 29 bytes (header,
+  `u8` presence mask, five float32 environmental values).
+
+Both frames use little-endian fields and share a cycle counter. Clients must
+negotiate an MTU of at least 61 bytes for the gas frame. Battery percentage is
+reported separately through the standard Battery Service and board status is a
+read-only boot-time bitmask.
 
 The time sync characteristic accepts a Unix timestamp (4 or 8 bytes) written by a connected client to synchronise the ESP32's internal RTC.
 
