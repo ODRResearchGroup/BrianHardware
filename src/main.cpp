@@ -123,7 +123,7 @@ enum GasSlot : uint8_t {
 };
 
 uint16_t sampleCycle = 0;
-int lastBatteryPercent = -1;
+int lastNotifiedBatteryPercent = -1;
 bool gasMtuWarningLogged = false;
 bool envMtuWarningLogged = false;
 
@@ -937,9 +937,9 @@ void loop() {
       batteryLevelCharacteristic->setValue(&batteryPercent,
                                            sizeof(batteryPercent));
 
-      if (lastBatteryPercent != batteryPercent) {
+      if (lastNotifiedBatteryPercent != batteryPercent) {
         batteryLevelCharacteristic->notify();
-        lastBatteryPercent = batteryPercent;
+        lastNotifiedBatteryPercent = batteryPercent;
       }
 
         // Send runtime estimate over BLE as float (hours).
